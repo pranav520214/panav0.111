@@ -31,6 +31,8 @@ export const IconZap = (p: P) => <S {...p} fill="currentColor"><path d="M13 2L4 
 export const IconSend = (p: P) => <S {...p}><path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4z" /></S>;
 export const IconCheck = (p: P) => <S {...p}><path d="M20 6L9 17l-5-5" /></S>;
 export const IconTrash = (p: P) => <S {...p}><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></S>;
+export const IconAlert = (p: P) => <S {...p}><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></S>;
+export const IconRestore = (p: P) => <S {...p}><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7v5l3.5 2" /></S>;
 export const IconBook = (p: P) => <S {...p}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></S>;
 export const IconArrowRight = (p: P) => <S {...p}><path d="M5 12h14M12 5l7 7-7 7" /></S>;
 export const IconChevronLeft = (p: P) => <S {...p}><path d="M15 18l-6-6 6-6" /></S>;

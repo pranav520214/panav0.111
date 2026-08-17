@@ -7,10 +7,16 @@
  * the bus; undo/redo are bus operations too, so user edits and AI edits
  * share one history. */
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { MODE_ORDER, Mode, Project, WorkspaceView } from "../types";
 import { Command } from "../core/commands";
 import { bus, CommandValidationError } from "../core/bus";
+import {
+  AutosaveService, AutosaveStatus, RecoveryCandidate,
+  clearRecovery, getAutosaveIntervalMs, isOrphanedRecovery,
+  readRecovery, saveKnownGood,
+} from "../core/autosave";
+import { deserialize } from "../core/format";
 
 export interface StoreState {
   project: Project;
@@ -24,6 +30,19 @@ export interface StoreState {
   canRedo: boolean;
   undoLabel: string | null;
   redoLabel: string | null;
+  /** Orphaned recovery snapshot awaiting a restore/discard decision. */
+  recovery: RecoveryCandidate | null;
+  autosave: { status: AutosaveStatus; intervalMs: number; lastSavedAt: number };
+}
+
+/** Detect an orphaned recovery snapshot once, before first paint. */
+function detectRecovery(): RecoveryCandidate | null {
+  try {
+    const rec = readRecovery();
+    return rec && isOrphanedRecovery(rec) ? rec : null;
+  } catch {
+    return null;
+  }
 }
 
 const MODE_KEY = "cadence.mode";
@@ -78,6 +97,8 @@ function initState(): StoreState {
     canRedo: bus.canRedo,
     undoLabel: bus.undoLabel(),
     redoLabel: bus.redoLabel(),
+    recovery: detectRecovery(),
+    autosave: { status: "idle", intervalMs: getAutosaveIntervalMs(), lastSavedAt: 0 },
   });
 }
 
@@ -105,14 +126,38 @@ export interface StoreApi {
   setEditorClip: (clipId: string) => void;
   toggleMixer: () => void;
   loadProject: (project: Project) => void;
+  /** Explicit known-good Save (atomic). Returns false if storage failed. */
+  saveNow: () => boolean;
+  /** Accept the orphaned recovery snapshot: load it, pin it as known-good. */
+  restoreRecovery: () => void;
+  /** Reject the orphaned recovery snapshot and clear it. */
+  discardRecovery: () => void;
+  /** Configure the autosave cadence (clamped to a sane range). */
+  setAutosaveInterval: (ms: number) => void;
 }
 
 const Ctx = createContext<StoreApi | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<StoreState>(initState);
+  const autosaveRef = useRef<AutosaveService | null>(null);
 
   useEffect(() => bus.subscribe(() => setState((s) => syncFromBus(s))), []);
+
+  /* Interval-driven autosave → recovery snapshots (never the known-good save). */
+  useEffect(() => {
+    const svc = new AutosaveService(bus, {
+      intervalMs: getAutosaveIntervalMs(),
+      onStatus: (status, lastSavedAt) =>
+        setState((s) => ({ ...s, autosave: { ...s.autosave, status, lastSavedAt } })),
+    });
+    autosaveRef.current = svc;
+    svc.start();
+    return () => {
+      svc.stop();
+      autosaveRef.current = null;
+    };
+  }, []);
 
   const api = useMemo<StoreApi>(() => ({
     state,
@@ -159,6 +204,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setEditorClip: (clipId) => setState((s) => ({ ...s, editorClipId: clipId })),
     toggleMixer: () => setState((s) => ({ ...s, mixerOpen: !s.mixerOpen })),
     loadProject: (project) => bus.replace(project),
+    saveNow: () => {
+      const ok = saveKnownGood(bus.getState(), bus.getVersion());
+      if (ok) {
+        clearRecovery(); // the known-good save is now newest — recovery is stale
+        autosaveRef.current?.markClean(bus.getVersion());
+      }
+      return ok;
+    },
+    restoreRecovery: () => {
+      const rec = state.recovery;
+      if (!rec) return;
+      const res = deserialize(rec.json);
+      if (res.ok) {
+        bus.replace(res.project);
+        saveKnownGood(res.project, bus.getVersion());
+        clearRecovery();
+        autosaveRef.current?.markClean(bus.getVersion());
+      }
+      setState((s) => ({ ...s, recovery: null }));
+    },
+    discardRecovery: () => {
+      clearRecovery();
+      setState((s) => ({ ...s, recovery: null }));
+    },
+    setAutosaveInterval: (ms) => {
+      const svc = autosaveRef.current;
+      const clamped = svc ? (svc.setInterval(ms), svc.getIntervalMs()) : getAutosaveIntervalMs();
+      setState((s) => ({ ...s, autosave: { ...s.autosave, intervalMs: clamped } }));
+    },
   }), [state]);
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

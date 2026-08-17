@@ -16,12 +16,11 @@
 import { Project } from "../types";
 import { Command, validateCommand } from "./commands";
 import { execCommand } from "./executors";
-import { deserialize } from "./format";
+import { loadKnownGood } from "./autosave";
 import { validateProject } from "./validate";
 import { buildDemoProject } from "./seed";
 
 export const HISTORY_CAP = 64;
-const STORAGE_KEY = "cadence.project.v1";
 
 export class CommandValidationError extends Error {
   constructor(public readonly op: string, message: string) {
@@ -183,15 +182,14 @@ export class CommandBus {
 /* ---------------- bootstrap ---------------- */
 
 function loadInitialProject(): Project {
+  // Boot from the last KNOWN-GOOD save only. Recovery snapshots are never
+  // auto-loaded — the UI detects an orphaned one and offers restore/discard,
+  // so an interrupted session can't silently shadow the user's real save.
+  // loadKnownGood() handles envelope unwrapping, the legacy save location and
+  // the migration registry; a corrupt save yields null → demo song.
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      // deserialize handles every save generation: the versioned envelope,
-      // legacy raw-Project autosaves, and the old cadence wrapper — the
-      // migration registry upgrades whatever it finds.
-      const res = deserialize(raw);
-      if (res.ok) return res.project;
-    }
+    const good = loadKnownGood();
+    if (good) return good.project;
   } catch {
     /* corrupted or blocked storage — fall through to the demo song */
   }

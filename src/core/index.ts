@@ -9,3 +9,4 @@ export * from "./audio";
 export * from "./seed";
 export * from "./validate";
 export * from "./format";
+export * from "./autosave";

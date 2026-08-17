@@ -11,7 +11,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
 ];
 
 export default function TopBar({ onToast, playing }: { onToast: (msg: string) => void; playing: boolean }) {
-  const { state, apply, undo, redo, setMode, loadProject } = useStore();
+  const { state, apply, undo, redo, setMode, loadProject, saveNow } = useStore();
   const [name, setName] = useState(state.project.name);
   const [exporting, setExporting] = useState(false);
 
@@ -135,7 +135,16 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
 
       <div className="w-px h-7 bg-ink-700 mx-1" />
 
-      <button className="btn" onClick={() => { localStorage.setItem("cadence.project.v1", JSON.stringify(state.project)); onToast("Project saved in this browser"); }} title="Autosaves anyway — this pins it now">
+      <button
+        className="btn"
+        onClick={() => {
+          // Atomic known-good save: temp write → verify → rename. Autosave
+          // recovery snapshots never touch this location.
+          const ok = saveNow();
+          onToast(ok ? "Project saved" : "Save failed — storage unavailable");
+        }}
+        title="Save as your known-good project (atomic write)"
+      >
         <IconSave size={14} /> Save
       </button>
       <button className="btn" onClick={() => fileRef.current?.click()} title="Open a .cadence.json project file (schema-validated)">

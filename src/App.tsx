@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Note, uid } from "./types";
 import { StoreProvider, StoreApi, useStore } from "./state/store";
-import { audio, serialize } from "./core";
+import { audio } from "./core";
 import TopBar from "./components/TopBar";
 import Transport from "./components/Transport";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
@@ -11,6 +11,7 @@ import PianoRoll from "./components/PianoRoll";
 import Mixer from "./components/Mixer";
 import AIPanel from "./components/AIPanel";
 import Browser from "./components/Browser";
+import RecoveryPrompt from "./components/RecoveryPrompt";
 
 const NOTE_KEYS: Record<string, number> = { a: 0, w: 1, s: 2, e: 3, d: 4, f: 5, t: 6, g: 7, y: 8, h: 9, u: 10, j: 11, k: 12, o: 13, l: 14, p: 15 };
 const DRUM_KEYS: Record<string, number> = { z: 0, x: 1, c: 2, v: 3, b: 4 };
@@ -36,7 +37,6 @@ function Workbench() {
   const [recording, setRecording] = useState(false);
   const [loop, setLoop] = useState(true);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [savedFlash, setSavedFlash] = useState(false);
   const heldNotes = useRef(new Map<string, { noteId: string; clipId: string; startStep: number; voice: { stop: () => void } }>());
   const recRef = useRef(false);
   recRef.current = recording;
@@ -57,18 +57,9 @@ function Workbench() {
     return () => audio.setOnTransport(null);
   }, [state.project]);
 
-  /* autosave (debounced) — written in the versioned open-daw format, so an
-   * app update migrates saved work instead of breaking it */
-  useEffect(() => {
-    const h = window.setTimeout(() => {
-      try {
-        localStorage.setItem("cadence.project.v1", serialize(state.project));
-        setSavedFlash(true);
-        window.setTimeout(() => setSavedFlash(false), 1400);
-      } catch { /* storage full/blocked — non-fatal */ }
-    }, 700);
-    return () => window.clearTimeout(h);
-  }, [state.project]);
+  /* Autosave is driven by the store's AutosaveService (interval + page-hide
+   * flush) into a dedicated recovery location — it never touches the user's
+   * known-good save, which only an explicit Save writes. */
 
   /* keyboard performance + shortcuts */
   useEffect(() => {
@@ -233,12 +224,14 @@ function Workbench() {
           {playing ? (recording ? "REC · live" : "playing") : "ready"}
         </span>
         <span className="hidden sm:inline">{state.project.lengthBars} bars · {state.project.bpm} BPM</span>
-        <span className="flex-1 text-center transition-opacity duration-300">
-          {savedFlash ? <span className="text-teal">autosaved ✓</span> : <span className="opacity-60">autosave on</span>}
-        </span>
+        <span className="flex-1" />
+        <AutosaveStatus />
         <span className="hidden md:inline opacity-80">Space play · A–K piano · Z–B drums · Ctrl+Z undo</span>
         <span className="text-amber-glow/80 uppercase tracking-widest">{state.mode}</span>
       </footer>
+
+      {/* orphaned-recovery prompt (restore / discard) */}
+      <RecoveryPrompt />
 
       {/* toasts */}
       <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center pointer-events-none">
@@ -249,5 +242,58 @@ function Workbench() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** Live autosave indicator + cadence control for the status bar. */
+function AutosaveStatus() {
+  const { state, setAutosaveInterval, gate } = useStore();
+  const { status, intervalMs, lastSavedAt } = state.autosave;
+  const showControl = gate("producer");
+
+  const label =
+    status === "saving" ? "autosaving…"
+    : status === "saved" ? `autosaved ${new Date(lastSavedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+    : status === "dirty" ? "autosave · pending"
+    : status === "error" ? "autosave failed"
+    : "autosave on";
+
+  const dotClass =
+    status === "saving" ? "bg-amber-glow animate-pulse"
+    : status === "saved" ? "bg-teal shadow-[0_0_6px_rgba(62,207,178,0.9)]"
+    : status === "dirty" ? "bg-amber-glow"
+    : status === "error" ? "bg-rec shadow-[0_0_6px_rgba(255,111,97,0.9)]"
+    : "bg-ink-600";
+
+  return (
+    <span className="flex items-center gap-2">
+      <span className={`flex items-center gap-1.5 transition-colors ${
+        status === "saved" ? "text-teal"
+        : status === "error" ? "text-rec"
+        : status === "saving" || status === "dirty" ? "text-amber-glow"
+        : "opacity-60"
+      }`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
+        {label}
+      </span>
+
+      {showControl && (
+        <label className="flex items-center gap-1 text-ink-400" title="Autosave cadence — recovery snapshots only, never your save">
+          every
+          <select
+            value={intervalMs}
+            onChange={(e) => setAutosaveInterval(Number(e.target.value))}
+            className="bg-ink-800 border border-ink-700 rounded px-1 py-0.5 text-[10px] font-mono text-ink-200 focus:outline-none focus:border-amber-glow/60"
+            aria-label="Autosave interval"
+          >
+            <option value={15000}>15s</option>
+            <option value={30000}>30s</option>
+            <option value={60000}>1m</option>
+            <option value={120000}>2m</option>
+            <option value={300000}>5m</option>
+          </select>
+        </label>
+      )}
+    </span>
   );
 }

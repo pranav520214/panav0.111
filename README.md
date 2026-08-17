@@ -146,6 +146,31 @@ npm run build           # production bundle
 automation-bearing — and asserts **deep equality**, alongside envelope,
 future-version, malformed-input and migration-registry cases.
 
+## Persistence & crash recovery
+
+Two deliberately separate storage locations, because a crash must never destroy
+the user's last known-good save:
+
+- **Known-good save** (`openDaw.save.v1`) — written ONLY by an explicit "Save".
+- **Recovery snapshot** (`openDaw.recovery.v1`) — written by the autosave driver
+  every N seconds (configurable, default 60s) while the project is dirty, and on
+  page-hide / beforeunload. Autosave never touches the known-good save.
+
+**Atomic writes.** Every write goes to a `.tmp` key, is read back and verified,
+then committed to the real key (the logical rename), then the temp is removed. A
+crash at any point leaves the real key holding either the previous complete
+payload or the new one — never a partial write.
+
+**Orphan recovery.** On launch, the app boots from the known-good save only. If a
+recovery snapshot is *newer* than that save (or no save exists), it holds work the
+user never saved by hand — the UI offers **Restore** (loads it and pins it as the
+save) or **Discard**. Recovery is never auto-loaded, so an interrupted session
+can't silently shadow the user's real save.
+
+The driver (`AutosaveService` in `src/core/autosave.ts`) tracks dirty state by bus
+version, is environment-agnostic (guarded `globalThis` handles), and is covered by
+`src/core/autosave.test.ts` — including the never-corrupt-the-save guarantee.
+
 ## Security
 
 Security is a design constraint, not a final pass:

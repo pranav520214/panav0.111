@@ -168,7 +168,7 @@ function Strip({
         >
           M
         </button>
-        {mode !== "beginner" && (
+        {extended && (
           <button
             onClick={() => apply(`${t.solo ? "Unsolo" : "Solo"} ${t.name}`, [{ op: "set_track_solo", trackId: t.id, value: !t.solo }])}
             className={`flex-1 text-[10px] font-bold py-0.5 rounded border transition-colors ${t.solo ? "bg-amber-glow/25 border-amber-glow/60 text-amber-glow" : "border-ink-700 text-ink-400 hover:text-ink-100"}`}

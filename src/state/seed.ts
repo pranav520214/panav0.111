@@ -23,7 +23,7 @@ export function buildDemoProject(): Project {
   wire(drums, { id: uid("clip"), name: "Beat A", lengthBars: 1, notes: genDrums(rng, 1, 1) }, [0, 1, 2, 3, 4, 5, 6, 7], clips);
   drums.volume = 0.95;
 
-  const bass = makeTrack("bass", "Subline", "#f0a848");
+  const bass = makeTrack("bass", "Subline", "#ffb45e");
   wire(bass, { id: uid("clip"), name: "Bass A", lengthBars: 2, notes: genBass(rng, rootMidi, "minor", 2, 1, PROG) }, [0, 2, 4, 6], clips);
 
   const keys = makeTrack("keys", "Glass Keys", "#3ecfb2");
@@ -55,7 +55,7 @@ export function buildDemoProject(): Project {
 const STARTER: InstrumentKind[] = ["drumkit", "bass", "keys", "pluck"];
 const STARTER_META: Record<string, [string, string]> = {
   drumkit: ["Drums", "#ff6f61"],
-  bass: ["Bass", "#f0a848"],
+  bass: ["Bass", "#ffb45e"],
   keys: ["Keys", "#3ecfb2"],
   pluck: ["Lead", "#58b7f5"],
 };

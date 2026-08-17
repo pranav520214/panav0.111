@@ -29,7 +29,7 @@ npm run build     # production build (dist/)
 
 Open the app, press **play** — a generated demo song ("First Light") is already loaded.
 Then try the copilot: *"make a beat"*, *"add a melody"*, *"more energy"*,
-*"arrange my song"*, *"fix my mix"*, *"what is a compressor?"*.
+*"change key to C minor"*, *"arrange my song"*.
 
 **Keyboard**: `Space` play/pause · `A W S E D F T G Y H U J K` live piano (records when
 the red button is armed) · `Z X C V B` drum pads · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo.
@@ -56,7 +56,7 @@ AI copilot ──▶ Intent parser ──▶ DawCommand[] ──▶ validated ex
 | `src/audio/synth.ts` | Code-synthesized voices + drum synthesis + WAV encoder |
 | `src/audio/engine.ts` | Real-time scheduler, track graphs, meters, offline WAV render |
 | `src/ai/commands.ts` | The **only** mutation gateway (pure executors + factories) |
-| `src/ai/intent.ts` | Deterministic intent → command plans, mix analysis, glossary |
+| `src/ai/intent.ts` | Deterministic MIDI-only intent parser → validated command plans |
 | `src/state/store.tsx` | Reducer, shared undo/redo, UX modes, selection |
 | `src/components/*` | Transport, Timeline, Step Sequencer, Piano Roll, Mixer, Copilot |
 
@@ -66,7 +66,7 @@ executor, no blocking of the UI thread, graceful degradation when storage is una
 ## Roadmap
 
 Phase done: shell + project system, audio engine + transport, timeline, MIDI editing,
-mixer + DSP, built-in instruments, AI command architecture, AI producer/MIDI/arrange/mix,
+mixer + DSP, built-in instruments, AI command architecture, AI MIDI/arrange copilot,
 progressive UX modes. Next: audio clip recording, MIDI I/O, automation lanes,
 plugin host (CLAP/WASM), project templates.
 

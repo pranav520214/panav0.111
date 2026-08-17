@@ -10,17 +10,17 @@ interface Msg { id: number; role: "user" | "ai"; text?: string; plan?: PlanPaylo
 let msgId = 0;
 const WELCOME: Record<string, string> = {
   beginner:
-    "Hey! I'm your copilot — I speak in real DAW operations, and everything I do can be undone with Ctrl+Z.\n\nFastest first win: press play ▶ and listen to \"First Light\", then tap a chip below. Want to understand anything? Ask \"what is a compressor?\"",
+    "Hey! I'm your music copilot — I write MIDI: beats, melodies, chords, basslines, arrangements. Everything I do can be undone with Ctrl+Z.\n\nFastest first win: press play, listen to \"First Light\", then tap a chip below.",
   producer:
-    "Copilot online. I can generate parts, reshape energy, structure arrangements and pass over your mix — always as reviewable commands.\n\nTry \"more energy\" once you've looped something you like.",
+    "Copilot online. I generate and edit musical content — parts, energy, structure, tempo, key — always as reviewable commands. Mixing stays yours.\n\nTry \"more energy\" once you've looped something you like.",
   advanced:
-    "Copilot online. All mutations flow through the validated command queue — approve plans, inspect items, revert batches atomically.\n\nSuggestion: run \"fix my mix\", then A/B with a single undo.",
+    "Copilot online — music-content scope only. All mutations flow through the validated command queue: approve plans, inspect items, revert batches atomically.\n\nSuggestion: run \"arrange my song\", then A/B with a single undo.",
 };
 
 const CHIPS: Record<string, string[]> = {
-  beginner: ["Make me a beat", "Add a melody", "Arrange my song", "What is a compressor?"],
-  producer: ["More energy", "Fix my mix", "Set tempo to 120", "Add a pad"],
-  advanced: ["Make it chill", "Transpose the lead up 3", "Add chords", "What is sidechain?"],
+  beginner: ["Make me a beat", "Add a melody", "Add a bassline", "Arrange my song"],
+  producer: ["More energy", "Add chords", "Set tempo to 120", "Add a pad"],
+  advanced: ["Make it chill", "Transpose the lead up 3", "Change key to C minor", "Arrange my song"],
 };
 
 export default function AIPanel() {
@@ -82,7 +82,7 @@ export default function AIPanel() {
       <div className="flex items-center gap-2 px-3 h-11 border-b border-ink-700/70 shrink-0">
         <span className={`w-2 h-2 rounded-full ${thinking ? "bg-amber-glow animate-pulse" : "bg-teal"} shadow-[0_0_8px_rgba(62,207,178,0.7)]`} />
         <span className="text-[13px] font-bold text-ink-100">Copilot</span>
-        <span className="text-[9px] font-mono text-ink-400 tracking-wider uppercase">structured commands · undoable</span>
+        <span className="text-[9px] font-mono text-ink-400 tracking-wider uppercase">midi copilot · undoable</span>
         <div className="flex-1" />
         <IconSparkles size={14} className="text-amber-glow" />
       </div>
@@ -160,7 +160,7 @@ export default function AIPanel() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder='Try "make the chorus more energetic"'
+          placeholder='Try "add a melody" or "arrange my song"'
           className="flex-1 bg-ink-950 border border-ink-700 rounded-lg px-3 py-2 text-[12.5px] text-ink-100 placeholder:text-ink-400/70 focus:outline-none focus:border-amber-glow/60 focus:ring-2 focus:ring-amber-glow/15 transition"
           aria-label="Ask the copilot"
         />

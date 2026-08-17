@@ -37,6 +37,6 @@ export const IconArrowRight = (p: P) => <S {...p}><path d="M5 12h14M12 5l7 7-7 7
 export const BrandMark = ({ size = 26 }: P) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
     <rect width="32" height="32" rx="8" fill="#1d2330" stroke="#39415a" />
-    <path d="M5 16h3l2-7 3 14 3-10 2 5 2-2h7" fill="none" stroke="#ffb454" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M5 16h3l2-7 3 14 3-10 2 5 2-2h7" fill="none" stroke="#00f5ff" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );

@@ -54,7 +54,7 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
       <div className="flex items-center gap-2.5 min-w-0">
         <BrandMark size={30} />
         <div className="leading-none">
-          <div className="font-bold tracking-[0.22em] text-[15px] text-ink-100">CADENCE</div>
+          <div className="font-display font-semibold tracking-[0.12em] text-[14px] text-ink-100">CADENCE</div>
           <div className="text-[9px] tracking-[0.14em] uppercase text-ink-400 mt-1">open-source AI DAW</div>
         </div>
         <div className={`flex items-end gap-[2.5px] h-4 ml-1 ${playing ? "eq-playing" : ""}`} aria-hidden>

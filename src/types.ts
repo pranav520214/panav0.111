@@ -105,7 +105,7 @@ export const INSTRUMENT_META: Record<
   { label: string; color: string; hint: string; icon: string }
 > = {
   drumkit: { label: "Drum Machine", color: "#ff6f61", hint: "Kick, snare, hats & claps", icon: "drum" },
-  bass: { label: "Bass Synth", color: "#f0a848", hint: "Deep sub & acid bass", icon: "wave" },
+  bass: { label: "Bass Synth", color: "#ffb45e", hint: "Deep sub & acid bass", icon: "wave" },
   keys: { label: "Keys", color: "#3ecfb2", hint: "Warm chords & stabs", icon: "keys" },
   pluck: { label: "Pluck Lead", color: "#58b7f5", hint: "Melodic lead line", icon: "pluck" },
   pad: { label: "Air Pad", color: "#a78bfa", hint: "Soft ambient texture", icon: "pad" },

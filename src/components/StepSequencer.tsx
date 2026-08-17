@@ -5,7 +5,7 @@ import { useEditorClip } from "../state/useEditorClip";
 import { getEngine } from "../audio/engine";
 import { IconDice, IconEraser } from "./icons";
 
-const LANE_COLORS = ["#ff6f61", "#ffb454", "#3ecfb2", "#58b7f5", "#a78bfa"];
+const LANE_COLORS = ["#ff6f61", "#ffb45e", "#00f5ff", "#35e0c2", "#a78bfa"];
 const LANE_KEYS = ["Z", "X", "C", "V", "B"];
 const CELL_W = 25;
 const LABEL_W = 132;

@@ -1,14 +1,21 @@
 /* Cadence Copilot — the AI layer.
- * Philosophy: never touch state directly. Parse intent → emit DawCommands →
- * the user approves plans → the shared executor applies them → undoable.
- * Deterministic generators are used instead of heavyweight inference, so the
- * copilot costs ~0 CPU/GPU when idle and stays instant on low-spec machines. */
+ *
+ * Scope contract: the copilot is a MUSIC-CONTENT copilot. It generates and
+ * edits MIDI — parts, patterns, energy, arrangement, tempo and key. It is not
+ * a general assistant: no filesystem, shell, network or mixing-console
+ * access. Mixer moves (volume, pan, mute, solo, FX) stay with the human.
+ *
+ * Safety contract: it never touches state directly. It parses intent →
+ * emits DawCommands → the user approves plans → the shared executor applies
+ * them → every batch is undoable. Deterministic seeded generators replace
+ * heavyweight inference, so the copilot costs ~0 CPU/GPU when idle and stays
+ * instant on low-spec machines — the real-time audio path is never blocked. */
 
 import {
-  Clip, DawCommand, InstrumentKind, Note, Project, Track, dbLabel, uid,
+  Clip, DawCommand, InstrumentKind, Note, Project, Track, uid,
 } from "../types";
 import {
-  SCALES, genBass, genChords, genDrums, genMelody, mulberry32, padFromChords, Rng,
+  genBass, genChords, genDrums, genMelody, mulberry32, padFromChords, Rng,
 } from "../theory";
 
 export interface PlanItem { label: string; command: DawCommand; }
@@ -28,6 +35,14 @@ const INSTRUMENT_WORD: Record<string, InstrumentKind> = {
   pad: "pad", atmosphere: "pad", ambient: "pad",
 };
 
+const TRACK_NAMES: Record<InstrumentKind, [string, string]> = {
+  drumkit: ["Drums", "#ff6f61"],
+  bass: ["Bass", "#ffb45e"],
+  keys: ["Keys", "#3ecfb2"],
+  pluck: ["Lead", "#58b7f5"],
+  pad: ["Pad", "#a78bfa"],
+};
+
 function findTrack(p: Project, text: string): Track | null {
   for (const t of p.tracks) {
     if (text.includes(t.name.toLowerCase())) return t;
@@ -44,9 +59,6 @@ function findTrack(p: Project, text: string): Track | null {
 const findKind = (p: Project, kind: InstrumentKind) => p.tracks.find((t) => t.instrument === kind) ?? null;
 
 const rngNow = (): Rng => mulberry32((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
-
-const dbToLin = (db: number) => Math.pow(10, db / 20);
-const linToDb = (v: number) => (v <= 0.0001 ? -60 : 20 * Math.log10(v));
 
 function drumEnergy(clip: Clip | undefined): number {
   if (!clip || clip.notes.length === 0) return 0;
@@ -76,68 +88,73 @@ function emptyBars(p: Project, track: Track | null): number[] {
   return bars;
 }
 
+function keyName(p: Project) {
+  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  return `${names[((p.rootMidi % 12) + 12) % 12]} ${p.scale}`;
+}
+
+const SCOPE_REPLY =
+  "That's outside my scope — I only generate and edit musical content (MIDI notes, patterns, arrangement, tempo, key). Levels, panning and effects live in the mixer and stay in your hands. Try \"add a melody\", \"make it more energetic\" or \"arrange my song\".";
+
 /* ---------------- the parser ---------------- */
 
 export function aiRespond(raw: string, p: Project): AiResult {
   const text = raw.toLowerCase().trim();
   const rng = rngNow();
 
-  /* -- questions & learning -- */
-  if (/(what|how|why|explain|define|tell me about|help me understand)\b/.test(text) || text.endsWith("?")) {
-    const gloss = glossary(text);
-    if (gloss) return { kind: "reply", text: gloss };
+  /* -- hard scope guards -- */
+  if (/(export|download|upload|install|\bplugin|vst|folder|browse the web|internet|email|save (the )?(project|song|file)|open (a |the )?(file|project))/.test(text)) {
+    return { kind: "reply", text: SCOPE_REPLY };
+  }
+
+  /* -- questions: redirect, don't lecture -- */
+  if (text.endsWith("?") || /^(what|how|why|where|explain|define|tell me about|help me understand)\b/.test(text)) {
+    if (/\b(help|what can you do|commands)\b/.test(text)) return { kind: "reply", text: CAPABILITIES };
+    return {
+      kind: "reply",
+      text: "I'm a music copilot, not a tutor — for concepts, hover anything or check the guide in the left panel. What I can do is write music: \"add a bassline\", \"make the chorus more energetic\", \"arrange my song\"…",
+    };
   }
   if (/\b(help|what can you do|commands)\b/.test(text) && text.length < 40) {
     return { kind: "reply", text: CAPABILITIES };
+  }
+
+  /* -- mixer-shaped requests are human territory -- */
+  if (/(louder|quieter|volume|\bmute\b|\bsolo\b|\bpan\b|compress|eq\b|reverb|delay send|limiter|fx|effect)/.test(text)) {
+    return {
+      kind: "reply",
+      text: "Mixing moves (volume, pan, mute, solo, FX) are yours — the mixer panel handles those, and every fader move is undoable. I stay in the notes: want me to add a part, reshape the energy, or arrange the song instead?",
+    };
   }
 
   /* -- tempo -- */
   const bpmMatch = text.match(/(?:tempo|bpm|speed)\D{0,8}(\d{2,3})/) ?? text.match(/(\d{2,3})\s*bpm/);
   if (bpmMatch) {
     const bpm = Math.max(55, Math.min(200, parseInt(bpmMatch[1], 10)));
-    return {
-      kind: "run",
-      text: `Setting the project tempo to ${bpm} BPM.`,
-      commands: [{ op: "set_tempo", bpm }],
-    };
+    return { kind: "run", text: `Setting the project tempo to ${bpm} BPM.`, commands: [{ op: "set_tempo", bpm }] };
   }
   if (/(faster|speed up)/.test(text)) return { kind: "run", text: `Nudging the tempo up to ${Math.min(200, p.bpm + 6)} BPM.`, commands: [{ op: "set_tempo", bpm: p.bpm + 6 }] };
   if (/(slower|slow down)/.test(text)) return { kind: "run", text: `Easing the tempo down to ${Math.max(55, p.bpm - 6)} BPM.`, commands: [{ op: "set_tempo", bpm: p.bpm - 6 }] };
 
-  /* -- volume / pan / mute / solo -- */
-  const louder = /(louder|boost|turn .* up|more volume|bigger)/.test(text);
-  const quieter = /(quieter|softer|turn .* down|less volume|lower)/.test(text);
-  if (louder || quieter) {
-    const t = findTrack(p, text) ?? p.tracks[0];
-    const delta = louder ? 2.5 : -2.5;
-    const next = dbToLin(Math.min(6, linToDb(t.volume) + delta));
+  /* -- key -- */
+  const keyMatch = text.match(/(?:key|scale)\s+(?:to|of|in)?\s*([a-g])(#|b|sharp|flat)?\s*(minor|major|maj|min)?/);
+  if (keyMatch && /(change|switch|set|to|in)\b/.test(text)) {
+    const idxMap: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+    let idx = idxMap[keyMatch[1].toLowerCase()];
+    if (keyMatch[2] === "#" || keyMatch[2] === "sharp") idx += 1;
+    if (keyMatch[2] === "b" || keyMatch[2] === "flat") idx -= 1;
+    idx = ((idx % 12) + 12) % 12;
+    let root = 48 + idx;
+    while (root < 52) root += 12;
+    const scale = keyMatch[3]?.startsWith("maj") ? "major" : "minor";
     return {
       kind: "run",
-      text: `${t.name}: ${dbLabel(t.volume)} dB → ${dbLabel(next)} dB. If it's not right, Ctrl+Z reverts it.`,
-      commands: [{ op: "set_track_volume", trackId: t.id, value: next }],
+      text: `Switching the project key to ${["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"][idx]} ${scale}. New notes I write will follow it — existing clips keep their pitches.`,
+      commands: [{ op: "set_key", rootMidi: root, scale }],
     };
   }
-  if (/pan/.test(text)) {
-    const t = findTrack(p, text) ?? p.tracks[0];
-    const val = /left/.test(text) ? -0.5 : /right/.test(text) ? 0.5 : 0;
-    return { kind: "run", text: `Panning ${t.name} ${val < 0 ? "left" : val > 0 ? "right" : "center"}.`, commands: [{ op: "set_track_pan", trackId: t.id, value: val }] };
-  }
-  if (/unmute|mute off/.test(text) || /\bmute\b/.test(text)) {
-    const t = findTrack(p, text);
-    if (t) {
-      const val = !/unmute|off/.test(text);
-      return { kind: "run", text: `${val ? "Muting" : "Unmuting"} ${t.name}.`, commands: [{ op: "set_track_mute", trackId: t.id, value: val }] };
-    }
-  }
-  if (/unsolo|solo off/.test(text)) {
-    return { kind: "run", text: "All solos released — every audible track is back.", commands: p.tracks.filter((t) => t.solo).map((t) => ({ op: "set_track_solo" as const, trackId: t.id, value: false })) };
-  }
-  if (/\bsolo\b/.test(text)) {
-    const t = findTrack(p, text);
-    if (t) return { kind: "run", text: `Soloing ${t.name} — press S on the track (or ask me to unsolo) to bring the rest back.`, commands: [{ op: "set_track_solo", trackId: t.id, value: true }] };
-  }
 
-  /* -- transpose -- */
+  /* -- transpose (MIDI edit) -- */
   const trMatch = text.match(/transpose\s+(\w+)?\s*(up|down)?\s*(\d+)?/);
   if (trMatch) {
     const t = findTrack(p, text) ?? findKind(p, "pluck") ?? p.tracks[0];
@@ -155,33 +172,26 @@ export function aiRespond(raw: string, p: Project): AiResult {
   }
 
   /* -- energy shaping -- */
-  if (/(more energy|energetic|punchier|hype|intense|bigger drop|exciting)/.test(text)) return energyPlan(p, rng, +1);
-  if (/(chill|calm|relax|softer vibe|mellow|less energy|laid back|lofi|lo-fi)/.test(text)) return energyPlan(p, rng, -1);
-
-  /* -- mixing -- */
-  if (/(mix|balance|level|clean up|polish|master|masking)/.test(text)) return mixPlan(p);
+  if (/(more energy|energetic|punchier|hype|intense|bigger drop|exciting|build( up)?)/.test(text)) return energyPlan(p, rng, +1);
+  if (/(chill|calm|relax|softer vibe|mellow|less energy|laid back|lofi|lo-fi|strip(back|ped)?|minimal)/.test(text)) return energyPlan(p, rng, -1);
 
   /* -- part generation -- */
-  if (/(drum|beat|groove|percussion)\b/.test(text)) return partPlan(p, rng, "drumkit", text);
+  if (/(drum|beat|groove|percussion|fill)\b/.test(text)) return partPlan(p, rng, "drumkit", text);
   if (/(bass(line)?)\b/.test(text)) return partPlan(p, rng, "bass", text);
   if (/(chord|harmony|keys|piano)\b/.test(text)) return partPlan(p, rng, "keys", text);
   if (/(melody|lead|hook|topline)\b/.test(text)) return partPlan(p, rng, "pluck", text);
   if (/(pad|atmosphere|texture|ambient)\b/.test(text)) return partPlan(p, rng, "pad", text);
 
-  /* -- track management -- */
+  /* -- track scaffolding -- */
   if (/add (a |an )?track/.test(text)) {
     for (const [word, kind] of Object.entries(INSTRUMENT_WORD)) {
       if (text.includes(word)) {
-        const names: Record<InstrumentKind, [string, string]> = {
-          drumkit: ["Drums", "#ff6f61"], bass: ["Bass", "#f0a848"], keys: ["Keys", "#3ecfb2"],
-          pluck: ["Lead", "#58b7f5"], pad: ["Pad", "#a78bfa"],
-        };
         const items: PlanItem[] = [];
         const clips: Clip[] = [];
-        const t = ensureTrack(p, kind, items, clips, names[kind][0], names[kind][1]);
-        if (items.length === 0) return { kind: "reply", text: `You already have a ${names[kind][0]} track (${t.name}). Try "make a melody" or "add a pad".` };
+        const t = ensureTrack(p, kind, items, clips, TRACK_NAMES[kind][0], TRACK_NAMES[kind][1]);
+        if (items.length === 0) return { kind: "reply", text: `You already have a ${TRACK_NAMES[kind][0]} track (${t.name}). Try "make a melody" or "add a pad".` };
         for (const c of clips) items.unshift({ label: `Create starter clip ${c.name}`, command: { op: "create_clip", trackId: t.id, clip: c } });
-        return { kind: "plan", title: `Add ${names[kind][0]} track`, summary: "One new track with an empty starter clip, ready to paint onto the timeline.", items };
+        return { kind: "plan", title: `Add ${TRACK_NAMES[kind][0]} track`, summary: "One new track with an empty starter clip, ready to paint onto the timeline.", items };
       }
     }
   }
@@ -193,7 +203,7 @@ export function aiRespond(raw: string, p: Project): AiResult {
 
   return {
     kind: "reply",
-    text: `I didn't catch a command I know yet. I work best with production verbs — try one of the chips below, or things like "make the drums louder", "set tempo to 128", "add a melody", "make it more energetic", or "arrange my song".`,
+    text: `I didn't catch a music task in that. I compose and edit MIDI — try "add a melody", "make the drums busier", "set tempo to 128", "change key to C minor", "make it more energetic", or "arrange my song".`,
   };
 }
 
@@ -202,11 +212,7 @@ export function aiRespond(raw: string, p: Project): AiResult {
 function partPlan(p: Project, rng: Rng, kind: InstrumentKind, text: string): AiResult {
   const items: PlanItem[] = [];
   const clipsToCreate: Clip[] = [];
-  const names: Record<InstrumentKind, [string, string]> = {
-    drumkit: ["Drums", "#ff6f61"], bass: ["Bass", "#f0a848"], keys: ["Keys", "#3ecfb2"],
-    pluck: ["Lead", "#58b7f5"], pad: ["Pad", "#a78bfa"],
-  };
-  const track = ensureTrack(p, kind, items, clipsToCreate, names[kind][0], names[kind][1]);
+  const track = ensureTrack(p, kind, items, clipsToCreate, TRACK_NAMES[kind][0], TRACK_NAMES[kind][1]);
   const energetic = /(energetic|dense|busy|full)/.test(text);
   const sparse = /(simple|sparse|minimal|basic)/.test(text);
   const energy = energetic ? 2 : sparse ? 0 : 1;
@@ -226,18 +232,14 @@ function partPlan(p: Project, rng: Rng, kind: InstrumentKind, text: string): AiR
 
   const clipId = existingClip ? existingClip.id : (clipsToCreate[0]?.id ?? uid("clip"));
   if (!existingClip && clipsToCreate.length > 0) {
-    // ensureTrack already queued add_track; create the generated clip inside it
+    // ensureTrack already queued add_track; fill the starter clip it created
     clipsToCreate[0].notes = notes;
     clipsToCreate[0].lengthBars = kind === "keys" || kind === "pad" ? 4 : kind === "drumkit" ? 1 : 2;
   }
-  if (existingClip) {
-    items.push({
-      label,
-      command: { op: "set_clip_content", clipId, notes, lengthBars: kind === "keys" || kind === "pad" ? 4 : kind === "drumkit" ? 1 : 2 },
-    });
-  } else {
-    items.push({ label, command: { op: "set_clip_content", clipId, notes, lengthBars: kind === "keys" || kind === "pad" ? 4 : kind === "drumkit" ? 1 : 2 } });
-  }
+  items.push({
+    label,
+    command: { op: "set_clip_content", clipId, notes, lengthBars: kind === "keys" || kind === "pad" ? 4 : kind === "drumkit" ? 1 : 2 },
+  });
 
   const bars = emptyBars(p, track);
   if (bars.length > 0) {
@@ -255,7 +257,7 @@ function partPlan(p: Project, rng: Rng, kind: InstrumentKind, text: string): AiR
 
   return {
     kind: "plan",
-    title: `${names[kind][0]} ${kind === "drumkit" ? "beat" : "part"} for "${p.name}"`,
+    title: `${TRACK_NAMES[kind][0]} ${kind === "drumkit" ? "beat" : "part"} for "${p.name}"`,
     summary: `Generated in ${keyName(p)} at ${p.bpm} BPM. Approve to apply — one Ctrl+Z reverts everything.`,
     items,
   };
@@ -280,85 +282,41 @@ function energyPlan(p: Project, rng: Rng, dir: 1 | -1): AiResult {
       label: `Rewrite drums at energy ${e + 1}/3 (${up ? "tighter kicks, busier hats" : "sparser, more space"})`,
       command: { op: "set_clip_content", clipId: drums.sourceClipId, notes: genDrums(rng, e, clip?.lengthBars ?? 1) },
     });
-    items.push({
-      label: `Drums ${up ? "+1.8 dB" : "−1.8 dB"}`,
-      command: { op: "set_track_volume", trackId: drums.id, value: dbToLin(linToDb(drums.volume) + dir * 1.8) },
-    });
-    if (up) items.push({ label: "Add drive glue to the drum bus", command: { op: "set_track_fx", trackId: drums.id, fx: { drive: 0.18 } } });
+    if (up) {
+      items.push({
+        label: `Snare fill into bar ${p.lengthBars}`,
+        command: {
+          op: "create_clip",
+          trackId: drums.id,
+          clip: { id: uid("clip"), name: "Fill", lengthBars: 1, notes: genDrums(rng, 2, 1, { fill: true }) },
+          placeBars: [p.lengthBars - 1],
+        },
+      });
+    }
   }
 
   if (bass) {
+    const len = p.clips[bass.sourceClipId]?.lengthBars ?? 2;
     items.push({
-      label: up ? "Bass: octave jumps on the last 1/8 of each bar" : "Bass: long root notes only",
-      command: { op: "set_clip_content", clipId: bass.sourceClipId, notes: genBass(rng, p.rootMidi, p.scale, p.clips[bass.sourceClipId]?.lengthBars ?? 2, up ? 2 : 0) },
+      label: up ? "Bass: octave jumps and passing notes" : "Bass: long root notes only",
+      command: { op: "set_clip_content", clipId: bass.sourceClipId, notes: genBass(rng, p.rootMidi, p.scale, len, up ? 2 : 0) },
     });
   }
 
   if (lead) {
-    if (up) {
-      items.push({ label: "Lead +1.5 dB and a touch of delay", command: { op: "set_track_volume", trackId: lead.id, value: dbToLin(linToDb(lead.volume) + 1.5) } });
-      items.push({ label: "Delay send 25% on the lead", command: { op: "set_track_fx", trackId: lead.id, fx: { delay: 0.25 } } });
-    } else {
-      const pad = findKind(p, "pad");
-      const keys = findKind(p, "keys");
-      items.push({ label: "Soften the lead by −2 dB", command: { op: "set_track_volume", trackId: lead.id, value: dbToLin(linToDb(lead.volume) - 2) } });
-      if (pad) items.push({ label: "Widen the pad reverb (60%)", command: { op: "set_track_fx", trackId: pad.id, fx: { reverb: 0.6 } } });
-      if (keys) items.push({ label: "Airy reverb on keys (35%)", command: { op: "set_track_fx", trackId: keys.id, fx: { reverb: 0.35 } } });
-    }
+    const len = p.clips[lead.sourceClipId]?.lengthBars ?? 2;
+    items.push({
+      label: up ? "Lead: denser, more motion" : "Lead: sparse, only the strong beats",
+      command: { op: "set_clip_content", clipId: lead.sourceClipId, notes: genMelody(rng, p.rootMidi, p.scale, len, up ? 2 : 0) },
+    });
   }
 
   return {
     kind: "plan",
     title: up ? "Raise the energy" : "Bring it down a notch",
     summary: up
-      ? "Density, loudness and motion go up — tempo, drum density, bass variation and lead presence. Fully undoable."
-      : "Space and calm go up — slower tempo, sparser drums, softer lead, wider reverb. Fully undoable.",
-    items,
-  };
-}
-
-function mixPlan(p: Project): AiResult {
-  const items: PlanItem[] = [];
-  const findings: string[] = [];
-
-  const targetVol: Partial<Record<InstrumentKind, number>> = {
-    drumkit: 0.95, bass: 0.8, keys: 0.62, pluck: 0.72, pad: 0.52,
-  };
-  const targetPan: Partial<Record<InstrumentKind, number>> = {
-    drumkit: 0, bass: 0, keys: -0.22, pluck: 0.2, pad: 0.3,
-  };
-
-  for (const t of p.tracks) {
-    const tv = targetVol[t.instrument];
-    if (tv !== undefined && Math.abs(linToDb(t.volume) - linToDb(tv)) > 1.2) {
-      findings.push(`${t.name} sits at ${dbLabel(t.volume)} dB — moving to ${dbLabel(tv)} dB for headroom`);
-      items.push({ label: `${t.name}: volume → ${dbLabel(tv)} dB`, command: { op: "set_track_volume", trackId: t.id, value: tv } });
-    }
-    const tp = targetPan[t.instrument];
-    if (tp !== undefined && Math.abs(t.pan - tp) > 0.08) {
-      items.push({ label: `${t.name}: pan ${tp === 0 ? "center" : tp < 0 ? `${Math.round(-tp * 100)}% L` : `${Math.round(tp * 100)}% R`}`, command: { op: "set_track_pan", trackId: t.id, value: tp } });
-    }
-  }
-
-  const bass = findKind(p, "bass");
-  const keys = findKind(p, "keys");
-  if (bass && keys) {
-    findings.push("Bass and keys share low-mid range — a gentle lowpass on keys reduces masking");
-    items.push({ label: "Keys: lowpass at 6.5 kHz (unmasks the bass)", command: { op: "set_track_fx", trackId: keys.id, fx: { cutoff: 6500 } } });
-  }
-  const pad = findKind(p, "pad");
-  if (pad) items.push({ label: "Pad: 50% reverb send for depth", command: { op: "set_track_fx", trackId: pad.id, fx: { reverb: 0.5 } } });
-  const lead = findKind(p, "pluck");
-  if (lead) items.push({ label: "Lead: 20% delay send for space", command: { op: "set_track_fx", trackId: lead.id, fx: { delay: 0.2 } } });
-
-  if (items.length === 0) {
-    return { kind: "reply", text: "Your balance already looks healthy — volumes are within ~1 dB of a typical mix, and the master limiter is catching peaks. Try asking me to add parts or energy instead." };
-  }
-
-  return {
-    kind: "plan",
-    title: "Mix pass — balance, space, masking",
-    summary: `Analyzed ${p.tracks.length} tracks. ${findings.slice(0, 2).join("; ")}. The master limiter stays on to catch peaks. One undo reverts the whole pass.`,
+      ? "Density and motion go up — tempo, drum density, a fill into the last bar, busier bass and lead. Pure MIDI; your mixer levels are untouched. Fully undoable."
+      : "Space and calm go up — slower tempo, sparser drums, resting bass and lead. Pure MIDI; your mixer levels are untouched. Fully undoable.",
     items,
   };
 }
@@ -368,19 +326,17 @@ function arrangePlan(p: Project, rng: Rng): AiResult {
   const bars = 16;
   const rootMidi = p.rootMidi;
   const scale = p.scale;
-  const s = SCALES[scale];
-  void s;
 
   items.push({ label: "Extend the timeline to 16 bars", command: { op: "set_length", bars } });
   items.push({ label: "Clear current placements to re-structure", command: { op: "clear_placements" } });
 
   const mk = (name: string, notes: Note[], lengthBars: number): Clip => ({ id: uid("clip"), name, lengthBars, notes });
 
-  const drums = ensureTrack(p, "drumkit", items, [], "Drums", "#ff6f61");
-  const bass = ensureTrack(p, "bass", items, [], "Bass", "#f0a848");
-  const keys = ensureTrack(p, "keys", items, [], "Keys", "#3ecfb2");
-  const lead = ensureTrack(p, "pluck", items, [], "Lead", "#58b7f5");
-  const pad = ensureTrack(p, "pad", items, [], "Pad", "#a78bfa");
+  const drums = ensureTrack(p, "drumkit", items, [], TRACK_NAMES.drumkit[0], TRACK_NAMES.drumkit[1]);
+  const bass = ensureTrack(p, "bass", items, [], TRACK_NAMES.bass[0], TRACK_NAMES.bass[1]);
+  const keys = ensureTrack(p, "keys", items, [], TRACK_NAMES.keys[0], TRACK_NAMES.keys[1]);
+  const lead = ensureTrack(p, "pluck", items, [], TRACK_NAMES.pluck[0], TRACK_NAMES.pluck[1]);
+  const pad = ensureTrack(p, "pad", items, [], TRACK_NAMES.pad[0], TRACK_NAMES.pad[1]);
 
   const introPerc = mk("Intro Perc", genDrums(rng, 0, 1), 1);
   const verseBeat = mk("Verse Beat", genDrums(rng, 1, 1), 1);
@@ -417,46 +373,13 @@ function arrangePlan(p: Project, rng: Rng): AiResult {
   };
 }
 
-/* ---------------- knowledge base ---------------- */
+/* ---------------- capabilities ---------------- */
 
-function keyName(p: Project) {
-  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-  return `${names[((p.rootMidi % 12) + 12) % 12]} ${p.scale}`;
-}
-
-const GLOSSARY: [RegExp, string][] = [
-  [/\b(compressor|compression)\b/, "A compressor quietly turns down the loudest moments so the quiet parts feel closer in volume. Think of it as an automatic hand on the volume fader — it makes tracks sound solid and 'glued' instead of jumpy. In Cadence the master chain has a gentle limiter (an extreme compressor) so your song never distorts."],
-  [/\blimiter\b/, "A limiter is a brick-wall compressor: nothing can get louder than the ceiling you set. Cadence keeps one on the master output so even dense arrangements can't clip (distort) on export."],
-  [/\b(eq|equaliz|equalis)\b/, "An EQ boosts or cuts specific frequency ranges — bass (low), mids (where vocals live), treble (high/air). Producers use EQ to carve space: e.g. cutting a little low-end from keys so the bass owns that range."],
-  [/\breverb\b/, "Reverb simulates the reflections of a room, from a small bathroom to a huge hall. A little makes instruments feel real; a lot makes them feel far away and dreamy. Try the reverb send on the Pad in the mixer."],
-  [/\bdelay\b/, "Delay repeats a sound after a set time — echo! When synced to tempo, echoes land on the beat and add rhythm. The pluck lead loves a subtle 25% delay send."],
-  [/\bsidechain\b/, "Sidechaining ducks one track whenever another plays — classically: the pad volume dips every time the kick hits, creating that pumping dance feel. It's mostly used to stop the kick and bass from fighting."],
-  [/\bquantiz|timing\b/, "Quantize snaps notes to the nearest grid line (like 1/16 notes) so human-played parts lock perfectly to tempo. Great for tightening; overuse makes things robotic — many producers quantize to ~80% strength."],
-  [/\bvelocity\b/, "Velocity is how hard a note is hit (0–127 in MIDI). Higher velocity = louder and often brighter. Varying velocity between notes is the #1 trick for making programmed drums feel human. In the step sequencer, click a lit cell again to accent it."],
-  [/\bmidi\b/, "MIDI is just performance data — note, pitch, length, velocity — not sound itself. That's why a MIDI clip can play through any instrument, be transposed, and edited note by note in the piano roll."],
-  [/\b(low ?pass|high ?pass|filter)\b/, "A filter removes frequencies. A low-pass keeps the lows and rolls off the highs (darker, underwater feel); a high-pass does the opposite. The mixer's cutoff knob is a low-pass — sweep it down on the keys and listen."],
-  [/\bclip(ping)?|distort\b/, "Clipping happens when a signal exceeds 0 dBFS — the waveform gets chopped flat and sounds harsh. Keep individual tracks under ~-6 dB and let the master limiter catch the peaks."],
-  [/\bheadroom\b/, "Headroom is the safety space between your loudest peak and 0 dB. Mixing with headroom (peaks around -6 dB) keeps effects sounding clean and mastering easy."],
-  [/\b(bus|send|aux)\b/, "A bus (or send) routes copies of several tracks into one shared effect — like one reverb every instrument can 'send' a little of its signal into. It saves CPU and makes everything sound like it's in the same room. Cadence's reverb is a shared bus."],
-  [/\barrange|arrangement\b/, "Arranging is deciding what plays when: intro, verse, chorus, bridge. Loops become songs through contrast — drop the drums for a verse, bring everything back for the chorus. Ask me to 'arrange my song' and watch it happen."],
-  [/\bbpm|tempo\b/, "BPM = beats per minute, the speed of your song. Ballads sit around 60–80, hip-hop 80–100, house 120–128, drum & bass 160+. Every clip in Cadence snaps to the project BPM grid."],
-  [/\b(waveform|sample|audio clip)\b/, "A waveform is the picture of a sound's pressure over time — tall spikes are loud moments. Audio clips contain real recorded sound; MIDI clips contain notes. Cadence currently works with MIDI clips, which is ideal for learning."],
-  [/\b(transpose|key|scale|minor|major)\b/, "The key is your song's gravitational center — a set of notes that sound 'right' together. Minor keys lean sad/serious, major leans bright/happy. Transposing shifts every note up or down while keeping the same pattern of intervals."],
-];
-
-function glossary(text: string): string | null {
-  for (const [re, answer] of GLOSSARY) if (re.test(text)) return answer;
-  if (/(music|production|produce|start|begin|learn)/.test(text)) {
-    return "Start tiny: 1) press play and listen to the demo song, 2) open the step sequencer and toggle one drum cell, 3) ask me to 'add a melody'. Three wins in five minutes beats reading a manual. Ask me about any term — compressor, reverb, sidechain, quantize…";
-  }
-  return null;
-}
-
-const CAPABILITIES = `Here's what I can do — everything I change is one Ctrl+Z away:
+const CAPABILITIES = `I'm your music copilot — I write and edit MIDI, nothing else. Every change is one Ctrl+Z away:
 
 • Create parts — "make a beat", "add a melody", "add chords", "add a bassline", "add a pad"
 • Shape energy — "make it more energetic" or "make it chill"
 • Structure — "arrange my song" (turns your loop into intro/verse/chorus)
-• Mix — "fix my mix" (analyzes levels, masking and space)
-• Direct commands — "make the drums louder", "pan the keys left", "set tempo to 128", "transpose the lead up 3", "mute the bass"
-• Teach — "what is a compressor?", "what is sidechain?", "how do I start?"`;
+• Direct edits — "set tempo to 128", "change key to C minor", "transpose the lead up 3", "clear the drum pattern"
+
+Levels, panning and effects are human territory — that's what the mixer is for.`;

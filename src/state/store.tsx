@@ -1,143 +1,80 @@
-/* Project store — user edits and AI edits share ONE undo/redo stack.
- * Mutations only happen through execCommands; the reducer never invents state. */
+/* React binding for the command bus.
+ *
+ * The bus (src/core/bus.ts) is the single source of truth for project state.
+ * This provider mirrors it into React and layers UI-local state on top
+ * (UX mode, selection, mixer visibility). Components never write state
+ * directly — they call apply(), which dispatches named Commands through
+ * the bus; undo/redo are bus operations too, so user edits and AI edits
+ * share one history. */
 
-import React, { createContext, useContext, useMemo, useReducer } from "react";
-import { DawCommand, Mode, Project } from "../types";
-import { execCommands } from "../ai/commands";
-import { buildDemoProject } from "./seed";
-import { validateProject } from "./validate";
-
-interface HistoryEntry { label: string; project: Project; }
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { Mode, Project } from "../types";
+import { Command } from "../core/commands";
+import { bus, CommandValidationError } from "../core/bus";
 
 export interface StoreState {
   project: Project;
-  past: HistoryEntry[];
-  future: HistoryEntry[];
   mode: Mode;
   selectedTrackId: string;
   editorClipId: string | null;
   mixerOpen: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
 }
 
-type Action =
-  | { type: "APPLY"; label: string; project: Project }
-  | { type: "APPLY_SILENT"; project: Project }
-  | { type: "SNAPSHOT"; label: string }
-  | { type: "UNDO" }
-  | { type: "REDO" }
-  | { type: "SET_MODE"; mode: Mode }
-  | { type: "SELECT_TRACK"; trackId: string }
-  | { type: "SET_EDITOR_CLIP"; clipId: string }
-  | { type: "TOGGLE_MIXER" }
-  | { type: "LOAD"; project: Project };
+const MODE_KEY = "cadence.mode";
 
-const HISTORY_CAP = 64;
+const readMode = (): Mode => {
+  const m = localStorage.getItem(MODE_KEY);
+  return m === "producer" || m === "advanced" ? m : "beginner";
+};
 
-function loadInitialProject(): Project {
-  try {
-    const raw = localStorage.getItem("cadence.project.v1");
-    if (raw) {
-      // never trust stored JSON — full schema validation before it touches anything
-      const res = validateProject(JSON.parse(raw));
-      if (res.ok) return res.project;
-      console.warn(`Cadence: stored project failed validation (${res.error}); loading demo song.`);
-    }
-  } catch { /* corrupted save — fall back to the demo song */ }
-  return buildDemoProject();
-}
-
-function initState(): StoreState {
-  const project = loadInitialProject();
-  const rawMode = localStorage.getItem("cadence.mode");
+/** Merge the bus's current truth into React state, keeping selection valid. */
+function syncFromBus(s: StoreState): StoreState {
+  const p = bus.getState();
+  const selectedTrackId = p.tracks.some((t) => t.id === s.selectedTrackId)
+    ? s.selectedTrackId
+    : p.tracks[0]?.id ?? "";
+  const selected = p.tracks.find((t) => t.id === selectedTrackId);
+  const editorClipId = s.editorClipId && p.clips[s.editorClipId]
+    ? s.editorClipId
+    : selected?.sourceClipId ?? null;
   return {
-    project,
-    past: [],
-    future: [],
-    mode: rawMode === "producer" || rawMode === "advanced" ? rawMode : "beginner",
-    selectedTrackId: project.tracks[0].id,
-    editorClipId: project.tracks[0].sourceClipId,
-    mixerOpen: true,
+    ...s,
+    project: p,
+    selectedTrackId,
+    editorClipId,
+    canUndo: bus.canUndo,
+    canRedo: bus.canRedo,
+    undoLabel: bus.undoLabel(),
+    redoLabel: bus.redoLabel(),
   };
 }
 
-function reducer(state: StoreState, action: Action): StoreState {
-  switch (action.type) {
-    case "APPLY":
-      return {
-        ...state,
-        past: [...state.past.slice(-HISTORY_CAP + 1), { label: action.label, project: state.project }],
-        future: [],
-        project: action.project,
-      };
-    case "APPLY_SILENT":
-      return { ...state, project: action.project };
-    case "SNAPSHOT":
-      return {
-        ...state,
-        past: [...state.past.slice(-HISTORY_CAP + 1), { label: action.label, project: state.project }],
-        future: [],
-      };
-    case "UNDO": {
-      if (state.past.length === 0) return state;
-      const prev = state.past[state.past.length - 1];
-      return {
-        ...state,
-        past: state.past.slice(0, -1),
-        future: [...state.future, { label: prev.label, project: state.project }],
-        project: prev.project,
-        selectedTrackId: prev.project.tracks.some((t) => t.id === state.selectedTrackId)
-          ? state.selectedTrackId
-          : prev.project.tracks[0].id,
-        editorClipId: null,
-      };
-    }
-    case "REDO": {
-      if (state.future.length === 0) return state;
-      const next = state.future[state.future.length - 1];
-      return {
-        ...state,
-        future: state.future.slice(0, -1),
-        past: [...state.past, { label: next.label, project: state.project }],
-        project: next.project,
-        selectedTrackId: next.project.tracks.some((t) => t.id === state.selectedTrackId)
-          ? state.selectedTrackId
-          : next.project.tracks[0].id,
-        editorClipId: null,
-      };
-    }
-    case "SET_MODE":
-      return { ...state, mode: action.mode };
-    case "SELECT_TRACK": {
-      const track = state.project.tracks.find((t) => t.id === action.trackId);
-      if (!track) return state;
-      return { ...state, selectedTrackId: action.trackId, editorClipId: track.sourceClipId };
-    }
-    case "SET_EDITOR_CLIP":
-      return { ...state, editorClipId: action.clipId };
-    case "TOGGLE_MIXER":
-      return { ...state, mixerOpen: !state.mixerOpen };
-    case "LOAD": {
-      const p = action.project;
-      return {
-        ...state,
-        past: [...state.past.slice(-HISTORY_CAP + 1), { label: "Load project", project: state.project }],
-        future: [],
-        project: p,
-        selectedTrackId: p.tracks[0].id,
-        editorClipId: p.tracks[0].sourceClipId,
-      };
-    }
-    default:
-      return state;
-  }
+function initState(): StoreState {
+  const p = bus.getState();
+  return syncFromBus({
+    project: p,
+    mode: readMode(),
+    selectedTrackId: p.tracks[0]?.id ?? "",
+    editorClipId: p.tracks[0]?.sourceClipId ?? null,
+    mixerOpen: true,
+    canUndo: bus.canUndo,
+    canRedo: bus.canRedo,
+    undoLabel: bus.undoLabel(),
+    redoLabel: bus.redoLabel(),
+  });
 }
 
 export interface StoreApi {
   state: StoreState;
-  /** Run commands through the executor; snapshot before → undoable. */
-  apply: (label: string, commands: DawCommand[]) => void;
+  /** Dispatch commands through the bus; snapshot before → one undo reverts the batch. */
+  apply: (label: string, commands: Command[]) => void;
   /** Same pipeline, no history entry (used while live-recording notes). */
-  applySilent: (commands: DawCommand[]) => void;
+  applySilent: (commands: Command[]) => void;
+  /** Mark an undo checkpoint (e.g. before a recording take). */
   snapshot: (label: string) => void;
   undo: () => void;
   redo: () => void;
@@ -151,29 +88,46 @@ export interface StoreApi {
 const Ctx = createContext<StoreApi | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined, initState);
+  const [state, setState] = useState<StoreState>(initState);
+
+  useEffect(() => bus.subscribe(() => setState((s) => syncFromBus(s))), []);
 
   const api = useMemo<StoreApi>(() => ({
     state,
     apply: (label, commands) => {
-      if (commands.length === 0) return;
-      dispatch({ type: "APPLY", label, project: execCommands(state.project, commands) });
+      try {
+        bus.dispatch(label, commands);
+      } catch (e) {
+        if (e instanceof CommandValidationError) {
+          console.warn(`[command-bus] rejected batch "${label}" — [${e.op}] ${e.message}`);
+        } else {
+          console.error("[command-bus] dispatch failed", e);
+        }
+      }
     },
     applySilent: (commands) => {
-      if (commands.length === 0) return;
-      dispatch({ type: "APPLY_SILENT", project: execCommands(state.project, commands) });
+      try {
+        bus.dispatchSilent(commands);
+      } catch (e) {
+        console.warn("[command-bus] silent dispatch rejected", e);
+      }
     },
-    snapshot: (label) => dispatch({ type: "SNAPSHOT", label }),
-    undo: () => dispatch({ type: "UNDO" }),
-    redo: () => dispatch({ type: "REDO" }),
+    snapshot: (label) => bus.snapshot(label),
+    undo: () => bus.undo(),
+    redo: () => bus.redo(),
     setMode: (mode) => {
-      localStorage.setItem("cadence.mode", mode);
-      dispatch({ type: "SET_MODE", mode });
+      localStorage.setItem(MODE_KEY, mode);
+      setState((s) => ({ ...s, mode }));
     },
-    selectTrack: (trackId) => dispatch({ type: "SELECT_TRACK", trackId }),
-    setEditorClip: (clipId) => dispatch({ type: "SET_EDITOR_CLIP", clipId }),
-    toggleMixer: () => dispatch({ type: "TOGGLE_MIXER" }),
-    loadProject: (project) => dispatch({ type: "LOAD", project }),
+    selectTrack: (trackId) =>
+      setState((s) => {
+        const track = bus.getState().tracks.find((t) => t.id === trackId);
+        if (!track) return s;
+        return { ...s, selectedTrackId: trackId, editorClipId: track.sourceClipId };
+      }),
+    setEditorClip: (clipId) => setState((s) => ({ ...s, editorClipId: clipId })),
+    toggleMixer: () => setState((s) => ({ ...s, mixerOpen: !s.mixerOpen })),
+    loadProject: (project) => bus.replace(project),
   }), [state]);
 
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NOTE_NAMES, ScaleType } from "../types";
 import { useStore } from "../state/store";
-import { getEngine } from "../audio/engine";
+import { audio } from "../core";
 import { IconLoop, IconPause, IconPlay, IconRecord, IconStop } from "./icons";
 
 interface Props {
@@ -34,7 +34,7 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
     const smooth = new Float32Array(BARS);
     let raf = 0;
     const draw = () => {
-      getEngine().getSpectrum(buf);
+      audio.getSpectrum(buf);
       g.clearRect(0, 0, cv.width, cv.height);
       const bw = cv.width / BARS;
       for (let i = 0; i < BARS; i++) {
@@ -60,7 +60,7 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
   useEffect(() => setBpmDraft(p.bpm), [p.bpm]);
 
   useEffect(() => {
-    const engine = getEngine();
+    const engine = audio;
     let raf = 0;
     let last = "";
     const tick = () => {

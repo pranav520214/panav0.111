@@ -3,7 +3,7 @@
 
 import { Clip, InstrumentKind, Project, Track, uid } from "../types";
 import { genBass, genChords, genDrums, genMelody, mulberry32, padFromChords } from "../theory";
-import { makeTrack } from "../ai/commands";
+import { makeTrack } from "./executors";
 
 const PROG = [0, 5, 2, 6]; // i – VI – III – VII  (Am F C G in A minor)
 

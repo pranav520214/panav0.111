@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { INSTRUMENT_META, Project, Track } from "../types";
 import { useStore } from "../state/store";
-import { getEngine } from "../audio/engine";
+import { audio } from "../core";
 import { IconMinus, IconPlus } from "./icons";
 
 const HEADER_W = 184;
@@ -22,7 +22,7 @@ export default function Timeline() {
   barWRef.current = barW;
 
   useEffect(() => {
-    const engine = getEngine();
+    const engine = audio;
     let raf = 0;
     const tick = () => {
       const step = engine.getCurrentStep();

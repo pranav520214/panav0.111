@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Track, TrackFx, dbLabel } from "../types";
 import { useStore } from "../state/store";
-import { getEngine } from "../audio/engine";
+import { audio } from "../core";
 import { IconChevronDown } from "./icons";
 
 const cutoffToSlider = (f: number) => Math.round((100 * Math.log(f / 300)) / Math.log(60));
@@ -15,7 +15,7 @@ export default function Mixer() {
   const smooth = useRef(new Map<string, number>());
 
   useEffect(() => {
-    const engine = getEngine();
+    const engine = audio;
     let raf = 0;
     const tick = () => {
       for (const t of p.tracks) {

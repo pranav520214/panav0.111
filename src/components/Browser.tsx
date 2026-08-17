@@ -1,6 +1,6 @@
 import { INSTRUMENT_META, InstrumentKind } from "../types";
 import { useStore } from "../state/store";
-import { buildDemoProject, buildEmptyProject } from "../state/seed";
+import { buildDemoProject, buildEmptyProject } from "../core";
 import { makeTrackWithClip } from "../ai/commands";
 import { IconBook, IconDrum, IconPiano, IconWave, IconZap } from "./icons";
 

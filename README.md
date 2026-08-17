@@ -37,34 +37,60 @@ the red button is armed) · `Z X C V B` drum pads · `Ctrl+Z` / `Ctrl+Shift+Z` u
 
 ## Architecture
 
+Three strict layers; dependencies point one way (UI → state → core; core → audio
+through a seam, never the reverse):
+
 ```
-AI copilot ──▶ Intent parser ──▶ DawCommand[] ──▶ validated executor ──▶ Project state
-     (never mutates state)            │                    │                  │
-                                      └── user gestures use the same path ───┘
-                                                           │
-                                                      undo/redo stack (snapshots)
-                                                           │
-                                   audio engine (lookahead scheduler, 25 ms tick)
-                                                           │
-                        per-track graph: filter → drive → pan → gain → analyser → master
-                                         └ delay send ┘   └ shared convolver reverb bus ┘
+src/
+├── core/                     # APPLICATION LAYER — framework-free, DOM-free
+│   ├── commands.ts           # Command vocabulary (named ops) + schema validation + metadata
+│   ├── executors.ts          # pure executors: (Project, Command) → Project — never throw
+│   ├── bus.ts                # CommandBus: dispatch → validate → execute → snapshot → notify
+│   ├── audio.ts              # AudioBackend seam (WebAudio today, Tauri/native later)
+│   ├── validate.ts           # schema validation/sanitization for every loaded project
+│   ├── seed.ts               # generated demo + starter projects
+│   └── index.ts              # barrel
+├── state/store.tsx           # UI STATE LAYER — React binding that mirrors the bus
+├── audio/                    # AUDIO ENGINE LAYER — real-time scheduler, DSP, WAV render
+│   ├── engine.ts             #   (reached only via the core/audio seam)
+│   └── synth.ts              # code-synthesized voices, drum synthesis, WAV encoder
+├── ai/                       # AI LAYER — sandboxed worker → Command[] → the same bus
+│   ├── intent.ts             # deterministic MIDI-only intent parser
+│   └── aiWorker.ts           # DOM-less Web Worker sandbox
+├── components/               # UI LAYER — talks to the store + audio seam, never AudioNodes
+└── theory.ts / types.ts      # shared domain model + music theory
 ```
 
-| Module | Responsibility |
-| --- | --- |
-| `src/types.ts` | Domain model: Project / Track / Clip / Note / DawCommand |
-| `src/theory.ts` | Scales, chords, seeded pattern generators (drums, bass, chords, melody) |
-| `src/audio/synth.ts` | Code-synthesized voices + drum synthesis + WAV encoder |
-| `src/audio/engine.ts` | Real-time scheduler, track graphs, meters, offline WAV render |
-| `src/ai/commands.ts` | The **only** mutation gateway (pure executors + factories) |
-| `src/ai/intent.ts` | Deterministic MIDI-only intent parser → validated command plans |
-| `src/ai/aiWorker.ts` | AI process sandbox — the parser runs in a DOM-less Web Worker |
-| `src/state/validate.ts` | Schema validation/sanitization for every project that is loaded |
-| `src/state/store.tsx` | Reducer, shared undo/redo, UX modes, selection |
-| `src/components/*` | Transport, Timeline, Step Sequencer, Piano Roll, Mixer, Copilot |
+### The command bus
 
-Design rules: no heavy work on the audio path, no direct state mutation outside the
-executor, no blocking of the UI thread, graceful degradation when storage is unavailable.
+Every mutation — a fader drag, a step-sequencer click, an AI plan, a file import —
+is a discrete, named `Command` applied through **one** function:
+
+```
+dispatch(label, commands)
+  1. schema-validate every command        ← one bad command rejects the whole batch
+  2. run pure executors:  before → after  ← (Project, Command) → Project, no side effects
+  3. push { label, before, commands }     ← the undo entry
+  4. notify subscribers                   ← React bindings, engine sync, autosave
+```
+
+Undo restores the stored pre-state snapshot; redo **replays the stored commands
+through the same executors**, so there is exactly one code path in both directions.
+`dispatchSilent()` (live note recording) and `snapshot()` (take checkpoints) ride
+the same pipeline. History is capped at 64 atomic batches; user edits and AI edits
+share one stack, so *Ctrl+Z reverts an AI plan exactly like a manual edit*.
+
+### The audio seam
+
+No UI component touches an `AudioNode` or the engine singleton — everything goes
+through the `AudioBackend` interface (`src/core/audio.ts`): transport, preview,
+metering, WAV export. Today a `WebAudioBackend` adapts the Web Audio engine; when
+the desktop shell lands, a `TauriBackend` implementing the same interface routes
+those calls over IPC to a native engine without touching a single component.
+
+Design rules: no heavy work on the audio path, no state mutation outside the bus,
+no UI → engine coupling outside the seam, graceful degradation when storage or
+workers are unavailable.
 
 ## Security
 

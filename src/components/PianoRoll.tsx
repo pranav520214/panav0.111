@@ -3,7 +3,7 @@ import { Note, STEPS_PER_BAR, midiName, uid } from "../types";
 import { SCALES, genMelody, mulberry32 } from "../theory";
 import { useStore } from "../state/store";
 import { useEditorClip } from "../state/useEditorClip";
-import { getEngine } from "../audio/engine";
+import { audio } from "../core";
 import { IconEraser, IconSparkles } from "./icons";
 
 const LABEL_W = 64;
@@ -51,7 +51,7 @@ export default function PianoRoll() {
     const dur = Math.min(noteLen, totalSteps - start);
     const vel = e.shiftKey ? 1 : 0.85;
     setNotes([...clip.notes, { id: uid("n"), pitch: snapped, start, dur, vel }], "Draw note");
-    getEngine().previewNote(track.id, snapped, 0.8, 0.4);
+    audio.previewNote(track.id, snapped, 0.8, 0.4);
   };
 
   const suggest = () => {

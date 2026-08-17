@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Mode } from "../types";
 import { useStore } from "../state/store";
-import { buildEmptyProject } from "../state/seed";
-import { parseProjectFile } from "../state/validate";
-import { getEngine } from "../audio/engine";
+import { audio, buildEmptyProject, parseProjectFile } from "../core";
 import { BrandMark, IconDownload, IconFolderOpen, IconPlus, IconRedo, IconSave, IconUndo } from "./icons";
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
@@ -32,7 +30,7 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
   const exportWav = async () => {
     setExporting(true);
     try {
-      const blob = await getEngine().exportWav(state.project);
+      const blob = await audio.exportWav(state.project);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -72,8 +70,8 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
     onToast(`Opened "${res.project.name}" — validated ${res.project.tracks.length} tracks`);
   };
 
-  const lastUndo = state.past[state.past.length - 1]?.label;
-  const lastRedo = state.future[state.future.length - 1]?.label;
+  const lastUndo = state.undoLabel;
+  const lastRedo = state.redoLabel;
 
   return (
     <header className="flex items-center gap-3 px-3 h-14 border-b border-ink-700 bg-ink-900/90 shrink-0 anim-fade-up">
@@ -129,10 +127,10 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
 
       <div className="w-px h-7 bg-ink-700 mx-1" />
 
-      <button className="btn btn-ghost" onClick={undo} disabled={state.past.length === 0} title={lastUndo ? `Undo: ${lastUndo}` : "Undo (Ctrl+Z)"}>
+      <button className="btn btn-ghost" onClick={undo} disabled={!state.canUndo} title={lastUndo ? `Undo: ${lastUndo}` : "Undo (Ctrl+Z)"}>
         <IconUndo size={15} />
       </button>
-      <button className="btn btn-ghost" onClick={redo} disabled={state.future.length === 0} title={lastRedo ? `Redo: ${lastRedo}` : "Redo (Ctrl+Shift+Z)"}>
+      <button className="btn btn-ghost" onClick={redo} disabled={!state.canRedo} title={lastRedo ? `Redo: ${lastRedo}` : "Redo (Ctrl+Shift+Z)"}>
         <IconRedo size={15} />
       </button>
 

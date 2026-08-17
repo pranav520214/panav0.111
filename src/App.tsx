@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Note, uid } from "./types";
 import { StoreProvider, StoreApi, useStore } from "./state/store";
-import { getEngine } from "./audio/engine";
+import { audio } from "./core";
 import TopBar from "./components/TopBar";
 import Transport from "./components/Transport";
 import Timeline from "./components/Timeline";
@@ -48,12 +48,12 @@ function Workbench() {
   const toastRef = useRef(onToast);
   toastRef.current = onToast;
 
-  /* keep the audio engine in sync with the project graph */
+  /* keep the audio backend in sync with the project graph
+   * (this composition root is the only place UI-land meets the backend) */
   useEffect(() => {
-    const engine = getEngine();
-    engine.setProject(state.project);
-    engine.onTransport = setPlaying;
-    return () => { engine.onTransport = null; };
+    audio.setProject(state.project);
+    audio.setOnTransport(setPlaying);
+    return () => audio.setOnTransport(null);
   }, [state.project]);
 
   /* autosave (debounced) */
@@ -75,7 +75,7 @@ function Workbench() {
 
     const down = (e: KeyboardEvent) => {
       if (isFormEl(e.target)) return;
-      const engine = getEngine();
+      const engine = audio;
       const s = storeRef.current;
 
       if (e.code === "Space") {
@@ -146,7 +146,7 @@ function Workbench() {
       /* close the recorded note's duration */
       if (held.noteId) {
         const s = storeRef.current;
-        const engine = getEngine();
+        const engine = audio;
         const clip = s.state.project.clips[held.clipId];
         if (clip) {
           const clipSteps = clip.lengthBars * 16;
@@ -166,12 +166,12 @@ function Workbench() {
   }, []);
 
   const togglePlay = () => {
-    const engine = getEngine();
+    const engine = audio;
     if (engine.playing) engine.pause(); else engine.play();
   };
 
   const toggleRecord = () => {
-    const engine = getEngine();
+    const engine = audio;
     if (!recording) {
       storeRef.current.snapshot("Take: recorded notes");
       setRecording(true);
@@ -198,10 +198,10 @@ function Workbench() {
             playing={playing}
             recording={recording}
             onTogglePlay={togglePlay}
-            onStop={() => getEngine().stop()}
+            onStop={() => audio.stop()}
             onToggleRecord={toggleRecord}
             loop={loop}
-            onToggleLoop={() => { setLoop((l) => !l); getEngine().loop = !loop; }}
+            onToggleLoop={() => { setLoop((l) => !l); audio.setLoop(!loop); }}
           />
           <Timeline />
           {isDrum ? <StepSequencer /> : <PianoRoll />}

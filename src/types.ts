@@ -73,32 +73,13 @@ export interface Project {
   clips: Record<string, Clip>;
 }
 
-/* ---------------- AI command system ----------------
- * The AI never touches state directly. It emits DawCommands,
- * which are validated and executed by the command executor,
- * and every batch is undoable through the shared undo stack. */
-
-export type DawCommand =
-  | { op: "set_project_name"; name: string }
-  | { op: "set_tempo"; bpm: number }
-  | { op: "set_key"; rootMidi: number; scale: ScaleType }
-  | { op: "set_length"; bars: number }
-  | { op: "set_track_volume"; trackId: string; value: number }
-  | { op: "set_track_pan"; trackId: string; value: number }
-  | { op: "set_track_mute"; trackId: string; value: boolean }
-  | { op: "set_track_solo"; trackId: string; value: boolean }
-  | { op: "set_track_fx"; trackId: string; fx: Partial<TrackFx> }
-  | { op: "rename_track"; trackId: string; name: string }
-  | { op: "add_track"; track: Track }
-  | { op: "remove_track"; trackId: string }
-  | { op: "create_clip"; trackId: string; clip: Clip; placeBars?: number[]; makeSource?: boolean }
-  | { op: "delete_clip"; trackId: string; clipId: string }
-  | { op: "set_clip_content"; clipId: string; notes: Note[]; lengthBars?: number; name?: string }
-  | { op: "add_notes"; clipId: string; notes: Note[] }
-  | { op: "transpose_clip"; clipId: string; semitones: number }
-  | { op: "place_clip"; trackId: string; clipId: string; bar: number }
-  | { op: "remove_placement"; trackId: string; placementId: string }
-  | { op: "clear_placements"; trackId?: string; range?: [number, number] };
+/* ---------------- command system ----------------
+ * The mutation vocabulary lives in the core layer (src/core/commands.ts).
+ * User gestures and the AI copilot both emit Commands; the command bus
+ * validates them, applies them through pure executors, and makes every
+ * batch a single atomic undo entry. The alias below keeps older imports
+ * (AI layer, panels) compiling unchanged. */
+export type { Command as DawCommand } from "./core/commands";
 
 export const INSTRUMENT_META: Record<
   InstrumentKind,

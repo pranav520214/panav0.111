@@ -1,7 +1,7 @@
 /* Project file validation & sanitization.
  *
  * Security rule: EVERY project that enters the app — autosave restore,
- * file import, drag-drop in the future — passes through validateProject().
+ * file import, bus.replace() — passes through validateProject().
  * We never trust parsed JSON: the validator rebuilds a sanitized Project
  * from scratch, clamping ranges, allow-listing enums and capping sizes,
  * so a tampered or version-skewed save can never crash the engine or the UI. */

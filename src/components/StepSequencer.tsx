@@ -2,7 +2,7 @@ import { DRUM_LANES, Note, STEPS_PER_BAR, uid } from "../types";
 import { genDrums, mulberry32 } from "../theory";
 import { useStore } from "../state/store";
 import { useEditorClip } from "../state/useEditorClip";
-import { getEngine } from "../audio/engine";
+import { audio } from "../core";
 import { IconDice, IconEraser } from "./icons";
 
 const LANE_COLORS = ["#ff6f61", "#ffb45e", "#00f5ff", "#35e0c2", "#a78bfa"];
@@ -91,7 +91,7 @@ export default function StepSequencer() {
             <div key={laneName} className="flex items-stretch group/lane">
               {/* lane label / pad */}
               <button
-                onMouseDown={() => getEngine().previewNote(track.id, lane, 0.95, 0.5)}
+                onMouseDown={() => audio.previewNote(track.id, lane, 0.95, 0.5)}
                 className="shrink-0 sticky left-0 z-10 bg-ink-850 group-hover/lane:bg-ink-800 border-r border-ink-700 flex items-center gap-2 px-3 transition-all duration-100 active:bg-ink-750"
                 style={{ width: LABEL_W, boxShadow: `inset 3px 0 0 ${LANE_COLORS[lane]}` }}
                 title={`Play ${laneName} (key ${LANE_KEYS[lane]})`}

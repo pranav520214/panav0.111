@@ -9,6 +9,7 @@
 
 import { Project } from "../types";
 import { getEngine } from "../audio/engine";
+import type { ProfilerStats } from "../audio/profiler";
 
 export interface AudioVoice {
   stop(): void;
@@ -20,18 +21,26 @@ export interface AudioBackend {
   /* graph */
   setProject(p: Project): void;
 
-  /* transport */
+  /* transport — the UI calls only these, never touches audio nodes */
   play(): void;
   pause(): void;
   stop(): void;
   readonly playing: boolean;
   setLoop(loop: boolean): void;
   readonly loop: boolean;
+  setRecordArm(armed: boolean): void;
+  isRecordArmed(): boolean;
   getCurrentStep(): number;
   setOnTransport(cb: ((playing: boolean) => void) | null): void;
 
   /* performance */
   previewNote(trackId: string, pitch: number, vel?: number, durSec?: number): AudioVoice;
+
+  /* voice pool — bounded polyphony with stealing */
+  setMaxPolyphony(n: number): void;
+  getMaxPolyphony(): number;
+  getActiveVoices(): number;
+  getStolenVoices(): number;
 
   /* rendering */
   exportWav(p: Project): Promise<Blob>;
@@ -42,6 +51,7 @@ export interface AudioBackend {
   getSpectrum(out: Uint8Array): void;
   getLoad(): number;
   getLatencyMs(): number;
+  getProfilerStats(): ProfilerStats;
 }
 
 class WebAudioBackend implements AudioBackend {
@@ -67,10 +77,16 @@ class WebAudioBackend implements AudioBackend {
     return this.e.playing;
   }
   setLoop(loop: boolean): void {
-    this.e.loop = loop;
+    this.e.setLoop(loop);
   }
   get loop(): boolean {
     return this.e.loop;
+  }
+  setRecordArm(armed: boolean): void {
+    this.e.setRecordArm(armed);
+  }
+  isRecordArmed(): boolean {
+    return this.e.isRecordArmed();
   }
   getCurrentStep(): number {
     return this.e.getCurrentStep();
@@ -81,6 +97,19 @@ class WebAudioBackend implements AudioBackend {
 
   previewNote(trackId: string, pitch: number, vel = 0.85, durSec = 8): AudioVoice {
     return this.e.previewNote(trackId, pitch, vel, durSec);
+  }
+
+  setMaxPolyphony(n: number): void {
+    this.e.setMaxPolyphony(n);
+  }
+  getMaxPolyphony(): number {
+    return this.e.getMaxPolyphony();
+  }
+  getActiveVoices(): number {
+    return this.e.getActiveVoices();
+  }
+  getStolenVoices(): number {
+    return this.e.getStolenVoices();
   }
 
   exportWav(p: Project): Promise<Blob> {
@@ -101,6 +130,9 @@ class WebAudioBackend implements AudioBackend {
   }
   getLatencyMs(): number {
     return this.e.getLatencyMs();
+  }
+  getProfilerStats(): ProfilerStats {
+    return this.e.getProfilerStats();
   }
 }
 

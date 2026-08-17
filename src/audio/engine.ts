@@ -1,11 +1,25 @@
-/* Cadence audio engine.
+/* Cadence audio engine — the real-time core.
+ *
+ * Architecture (see the modules it composes):
+ *  - scheduler.ts  TransportClock: deterministic lookahead scheduling driven by the
+ *                  AudioContext clock. The JS timer is only a pump; the clock is truth.
+ *  - voicePool.ts  VoicePool: bounded polyphony with oldest/quietest stealing so a
+ *                  busy arrangement never melts a low-end CPU.
+ *  - profiler.ts   AudioProfiler: allocation-free per-callback CPU timing to catch
+ *                  scheduling regressions.
+ *
  * Design rules baked in here:
- *  - The scheduler only *queues* WebAudio nodes — no heavy work on the audio path.
- *  - The exact same renderStep() drives live playback AND offline WAV export.
- *  - Track graphs are lazily built and cheap (a handful of native nodes each),
- *    so the whole DAW runs happily on integrated graphics / low-end CPUs. */
+ *  - No heavy work, and no object/buffer allocation, on the audio path. Metering,
+ *    spectrum and profiler buffers are all pre-allocated once and reused.
+ *  - The exact same per-step note walk drives live playback AND offline WAV export.
+ *  - Track graphs are lazily built and cheap (a handful of native nodes each).
+ *  - The UI never touches an AudioNode: it calls play/pause/stop/loop/record-arm
+ *    and reads transport/metering through these methods only (via core/audio.ts). */
 
-import { Project, Track } from "../types";
+import { InstrumentKind, Note, Project, Track } from "../types";
+import { AudioProfiler, ProfilerStats } from "./profiler";
+import { TransportClock } from "./scheduler";
+import { VoicePool } from "./voicePool";
 import { encodeWav, makeDriveCurve, makeImpulse, playDrum, playNote } from "./synth";
 
 interface TrackNodes {
@@ -22,46 +36,26 @@ interface TrackNodes {
   levelBuf: Uint8Array;
 }
 
-const AHEAD = 0.12; // seconds of lookahead
-const TICK = 25; // ms scheduler interval
-const MAX_VOICES_PER_STEP = 30;
+export const DEFAULT_MAX_POLYPHONY = 32;
 
-/** Shared between live playback and offline rendering. */
-export function renderStep(
-  ctx: BaseAudioContext,
-  p: Project,
-  absStep: number,
-  time: number,
-  stepDur: number,
-  getInput: (trackId: string) => AudioNode | null,
-): void {
+/**
+ * Walk every note that sounds on `absStep` and hand it to `emit`.
+ * Shared verbatim by live playback and offline rendering — one code path.
+ * The loop itself allocates nothing; `emit` is the only callback.
+ */
+export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note) => void): void {
   const total = p.lengthBars * 16;
   const s = ((absStep % total) + total) % total;
-  const bar = Math.floor(s / 16);
   const soloAny = p.tracks.some((t) => t.solo);
-  let budget = MAX_VOICES_PER_STEP;
-
   for (const t of p.tracks) {
-    if (budget <= 0) break;
     const audible = soloAny ? t.solo : !t.mute;
     if (!audible) continue;
-    const input = getInput(t.id);
-    if (!input) continue;
     for (const pl of t.placements) {
       const clip = p.clips[pl.clipId];
       if (!clip) continue;
       const rel = s - pl.bar * 16;
       if (rel < 0 || rel >= clip.lengthBars * 16) continue;
-      for (const n of clip.notes) {
-        if (budget <= 0) break;
-        if (n.start !== rel) continue;
-        budget--;
-        if (t.instrument === "drumkit") {
-          playDrum(ctx, input, n.pitch, time, n.vel);
-        } else {
-          playNote(ctx, input, t.instrument, n.pitch, time, Math.max(0.06, n.dur * stepDur), n.vel);
-        }
-      }
+      for (const n of clip.notes) if (n.start === rel) emit(t, n);
     }
   }
 }
@@ -75,13 +69,15 @@ class CadenceEngine {
   private nodes = new Map<string, TrackNodes>();
   private project: Project | null = null;
 
+  /* real-time core */
+  private clock: TransportClock | null = null;
+  private pool: VoicePool | null = null;
+  private profiler = new AudioProfiler(256, 5, 25);
+
   playing = false;
   loop = true;
-  private timer: number | null = null;
-  private scheduledStep = 0;
-  private nextTime = 0;
   private stoppedStep = 0;
-  private stopToken = 0;
+  private recordArmed = false;
   private loadEma = 0;
   private masterBuf: Uint8Array = new Uint8Array(2048);
 
@@ -111,6 +107,26 @@ class CadenceEngine {
       revGain.gain.value = 0.9;
       this.reverb.connect(revGain);
       revGain.connect(this.busIn);
+
+      /* Voice pool: bounded, stealing, pre-bound builder (no per-note closures). */
+      this.pool = new VoicePool(this.ctx, DEFAULT_MAX_POLYPHONY);
+      this.pool.setBuilder((ctx, dest, kind, pitch, time, dur, vel) => {
+        if (kind === "drumkit") playDrum(ctx, dest, ((pitch % 5) + 5) % 5, time, vel);
+        else playNote(ctx, dest, kind, pitch, time, Math.max(0.06, dur), vel);
+      });
+
+      /* Scheduler: audio-clock lookahead; the pump is profiled automatically. */
+      this.clock = new TransportClock(
+        this.ctx,
+        {
+          onStep: (abs, time) => this.scheduleStep(abs, time),
+          onEnded: () => this.handleEnded(),
+        },
+        () => (this.project?.lengthBars ?? 1) * 16,
+        { profiler: this.profiler },
+      );
+      this.clock.loop = this.loop;
+
       if (this.project) this.syncTracks(this.project);
     }
     return this.ctx;
@@ -121,17 +137,13 @@ class CadenceEngine {
     this.project = p;
     if (!this.ctx) return;
     this.syncTracks(p);
-    if (this.playing && prev && prev.bpm !== p.bpm) {
-      // re-anchor the grid so tempo changes stay glitch-free
-      const cur = this.getCurrentStep();
-      const sd = this.stepDur();
-      this.scheduledStep = Math.ceil(cur);
-      this.nextTime = this.ctx.currentTime + Math.max(0, this.scheduledStep - cur) * sd;
-    }
+    // Re-anchor the grid on tempo change so playback stays glitch-free.
+    if (this.clock && prev && prev.bpm !== p.bpm) this.clock.setStepDur(this.stepDur());
   }
 
   private syncTracks(p: Project): void {
     const ctx = this.ctx!;
+    void ctx;
     const alive = new Set(p.tracks.map((t) => t.id));
     for (const [id, n] of this.nodes) {
       if (!alive.has(id)) {
@@ -204,7 +216,8 @@ class CadenceEngine {
     }
   }
 
-  /* ---------------- transport ---------------- */
+  /* ---------------- transport (the only surface the UI drives) ---------------- */
+
   private stepDur(): number {
     return 60 / (this.project?.bpm ?? 120) / 4;
   }
@@ -212,65 +225,104 @@ class CadenceEngine {
   play(): void {
     const ctx = this.ensureCtx();
     void ctx.resume();
-    if (this.playing) return;
+    if (this.playing || !this.clock) return;
     this.playing = true;
-    this.stopToken++;
-    this.scheduledStep = Math.floor(this.stoppedStep);
-    this.nextTime = ctx.currentTime + 0.08;
-    this.timer = window.setInterval(() => this.tick(), TICK);
+    this.clock.loop = this.loop;
+    this.clock.play(Math.floor(this.stoppedStep));
     this.onTransport?.(true);
   }
 
   pause(): void {
-    if (!this.playing) return;
-    this.stoppedStep = Math.floor(this.getCurrentStep());
-    this.halt();
+    if (!this.playing || !this.clock) return;
+    this.stoppedStep = this.clock.pause();
+    this.playing = false;
+    this.pool?.allNotesOff(this.ctx?.currentTime ?? 0);
+    this.onTransport?.(false);
   }
 
   stop(): void {
+    if (this.clock) {
+      this.clock.stop();
+      this.pool?.allNotesOff(this.ctx?.currentTime ?? 0);
+    }
     this.stoppedStep = 0;
-    this.halt();
-  }
-
-  private halt(): void {
-    if (this.timer !== null) { window.clearInterval(this.timer); this.timer = null; }
     if (this.playing) {
       this.playing = false;
       this.onTransport?.(false);
     }
   }
 
-  private tick(): void {
-    const ctx = this.ctx!;
-    const p = this.project;
-    if (!p) return;
-    const t0 = performance.now();
-    const sd = this.stepDur();
-    const total = p.lengthBars * 16;
-    while (this.nextTime < ctx.currentTime + AHEAD) {
-      const abs = this.scheduledStep;
-      if (this.loop || abs < total) {
-        renderStep(ctx, p, abs, this.nextTime, sd, (id) => this.nodes.get(id)?.input ?? null);
-      } else {
-        // non-looping playback reached the end
-        const token = this.stopToken;
-        window.setTimeout(() => { if (this.stopToken === token) this.stop(); }, Math.max(0, (this.nextTime - ctx.currentTime) * 1000));
-        break;
+  setLoop(loop: boolean): void {
+    this.loop = loop;
+    if (this.clock) this.clock.loop = loop;
+  }
+
+  /** Arm/disarm recording. The UI transport calls this; note capture reads it. */
+  setRecordArm(armed: boolean): void {
+    this.recordArmed = armed;
+  }
+
+  isRecordArmed(): boolean {
+    return this.recordArmed;
+  }
+
+  /** Max simultaneous voices before stealing kicks in. */
+  setMaxPolyphony(n: number): void {
+    this.ensureCtx();
+    this.pool?.setMaxPolyphony(n);
+  }
+
+  getMaxPolyphony(): number {
+    return this.pool?.getMaxPolyphony() ?? DEFAULT_MAX_POLYPHONY;
+  }
+
+  getActiveVoices(): number {
+    return this.pool?.getActiveCount() ?? 0;
+  }
+
+  getStolenVoices(): number {
+    return this.pool?.stolenTotal ?? 0;
+  }
+
+  getProfilerStats(): ProfilerStats {
+    return this.profiler.getStats();
+  }
+
+  /** Called by the scheduler when non-looping playback has scheduled everything. */
+  private handleEnded(): void {
+    // The tail is still ringing; report stopped once the lookahead drains.
+    const wait = Math.max(0, (this.clock?.lookahead ?? 0.12) + 0.05) * 1000;
+    window.setTimeout(() => {
+      if (!this.clock?.isRunning()) {
+        this.playing = false;
+        this.stoppedStep = 0;
+        this.onTransport?.(false);
       }
-      this.scheduledStep++;
-      this.nextTime += sd;
-    }
-    const dt = performance.now() - t0;
-    this.loadEma = this.loadEma * 0.9 + (dt / TICK) * 0.1;
+    }, wait);
+  }
+
+  /** Schedule every note of `absStep` at the sample-accurate `time` via the voice pool. */
+  private scheduleStep(abs: number, time: number): void {
+    const p = this.project;
+    const pool = this.pool;
+    if (!p || !pool) return;
+    const sd = this.clock?.getStepDur() ?? this.stepDur();
+    // Per-step note walk. `emit` is one closure per musical step (not per audio
+    // buffer); everything inside it routes primitives into the pre-bound pool.
+    stepNotes(p, abs, (t, n) => {
+      const input = this.nodes.get(t.id)?.input;
+      if (!input) return;
+      const dur = t.instrument === "drumkit" ? 0.4 : Math.max(0.06, n.dur * sd);
+      pool.trigger(input, time, dur, n.vel, t.instrument as InstrumentKind, n.pitch);
+    });
   }
 
   getCurrentStep(): number {
     const p = this.project;
     if (!p) return 0;
     const total = p.lengthBars * 16;
-    if (!this.playing || !this.ctx) return this.stoppedStep % total;
-    const frac = this.scheduledStep - (this.nextTime - this.ctx.currentTime) / this.stepDur();
-    return ((frac % total) + total) % total;
+    if (!this.playing || !this.clock) return ((this.stoppedStep % total) + total) % total;
+    return ((this.clock.getPosition() % total) + total) % total;
   }
 
   /* ---------------- live preview (keyboard / pads) ---------------- */
@@ -301,7 +353,7 @@ class CadenceEngine {
     };
   }
 
-  /* ---------------- metering & diagnostics ---------------- */
+  /* ---------------- metering & diagnostics (pre-allocated, allocation-free) ---------------- */
   getTrackLevel(trackId: string): number {
     const n = this.nodes.get(trackId);
     if (!n) return 0;
@@ -315,13 +367,18 @@ class CadenceEngine {
     return rms(this.masterBuf);
   }
 
-  /** Fill `out` with the master frequency spectrum (0..255 per bin). Cheap: one memcpy from the analyser. */
+  /** Fill `out` with the master frequency spectrum (0..255 per bin). One memcpy, no alloc. */
   getSpectrum(out: Uint8Array): void {
     if (!this.ctx) { out.fill(0); return; }
     this.masterAnalyser.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
   }
 
-  getLoad(): number { return Math.min(1, this.loadEma); }
+  /** Smoothed scheduling load (0..1), derived from the profiler window. */
+  getLoad(): number {
+    const s = this.profiler.getStats();
+    this.loadEma = this.loadEma * 0.85 + s.peakLoad * 0.15;
+    return Math.min(1, this.loadEma);
+  }
 
   getLatencyMs(): number {
     if (!this.ctx) return 0;
@@ -331,7 +388,7 @@ class CadenceEngine {
 
   getSampleRate(): number { return this.ctx?.sampleRate ?? 0; }
 
-  /* ---------------- offline render / export ---------------- */
+  /* ---------------- offline render / export (direct synth, no pool needed) ---------------- */
   async exportWav(p: Project): Promise<Blob> {
     const sr = 44100;
     const stepDur = 60 / p.bpm / 4;
@@ -381,7 +438,13 @@ class CadenceEngine {
 
     const total = p.lengthBars * 16;
     for (let s = 0; s < total; s++) {
-      renderStep(octx, p, s, 0.05 + s * stepDur, stepDur, (id) => inputs.get(id) ?? null);
+      const time = 0.05 + s * stepDur;
+      stepNotes(p, s, (t, n) => {
+        const dest = inputs.get(t.id);
+        if (!dest) return;
+        if (t.instrument === "drumkit") playDrum(octx, dest, n.pitch, time, n.vel);
+        else playNote(octx, dest, t.instrument, n.pitch, time, Math.max(0.06, n.dur * stepDur), n.vel);
+      });
     }
     const rendered = await octx.startRendering();
     return encodeWav(rendered);

@@ -59,6 +59,7 @@ src/
 │   ├── scheduler.ts          # audio-clock lookahead transport clock
 │   ├── voicePool.ts          # bounded polyphony with oldest/quietest stealing
 │   ├── profiler.ts           # allocation-free per-callback CPU profiler
+│   ├── subsynth.ts           # subtractive synth + 8 factory presets + voice-headroom profiler
 │   └── synth.ts              # code-synthesized voices, drum synthesis, WAV encoder
 ├── ai/                       # AI LAYER — sandboxed worker → Command[] → the same bus
 │   ├── intent.ts             # deterministic MIDI-only intent parser
@@ -122,6 +123,26 @@ input → [gate] → INSERTS(filter→drive) → PAN → VOLUME(fader) → POST-
   there is one definition of solo/mute semantics.
 - Live playback and offline WAV export share the *same* topology factories
   (`buildChannel` / `buildReturn` / `buildMaster`), so a render matches what you hear.
+
+### The subtractive synth (`src/audio/subsynth.ts` → Synth Lab view)
+
+A lightweight subtractive voice: **two oscillators** (sine / triangle / saw / square /
+noise) with per-osc detune and mix, a **filter** (LP / HP / BP, cutoff + resonance), an
+**ADSR amp envelope**, an **ADSR filter envelope** routable to cutoff, one **LFO**
+routable to pitch or amplitude, and **unison (1–8)** with detune spread. **Mono/poly**
+modes with glide (portamento). Unison voices share a single filter + amp envelope, so
+8-way unison costs only a few extra oscillators.
+
+- DSP is a thin native-WebAudio graph that runs on the platform audio thread (off the
+  JS heap) — this is what keeps **16+ simultaneous voices dropout-free** on a 4-core,
+  8 GB, integrated-graphics machine.
+- `profileSubSynth(patch, voices, seconds)` renders N simultaneous voices offline and
+  times it, yielding a measured **cost-per-voice** and an **estimated headroom** number
+  that the Synth Lab displays live (with active/peak voice LEDs).
+- **8 factory presets** — two each of bass, pad, lead and pluck (`SUBSYNTH_PRESETS`).
+- The Synth Lab workspace view (switcher → *Synth Lab*, or press `4`) is fully
+  interactive: presets, a playable keyboard (click/drag or the A–K row), live patch
+  editing, and the headroom profiler.
 
 ## Project file format
 

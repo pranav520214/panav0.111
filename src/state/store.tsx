@@ -56,7 +56,7 @@ const readMode = (): Mode => {
 
 const readView = (): WorkspaceView => {
   const v = localStorage.getItem(VIEW_KEY);
-  return v === "pianoroll" || v === "mixer" ? v : "arrangement";
+  return v === "pianoroll" || v === "mixer" || v === "synth" ? v : "arrangement";
 };
 
 const readAiOpen = (): boolean => localStorage.getItem(AI_KEY) !== "0";

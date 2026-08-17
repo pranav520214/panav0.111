@@ -1,8 +1,8 @@
 import React from "react";
 
-type P = { size?: number; className?: string };
-const S = ({ size = 15, className, children, viewBox = "0 0 24 24", fill = "none" }: P & { children: React.ReactNode; viewBox?: string; fill?: string }) => (
-  <svg width={size} height={size} viewBox={viewBox} fill={fill} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+type P = { size?: number; className?: string; style?: React.CSSProperties };
+const S = ({ size = 15, className, style, children, viewBox = "0 0 24 24", fill = "none" }: P & { children: React.ReactNode; viewBox?: string; fill?: string }) => (
+  <svg width={size} height={size} viewBox={viewBox} fill={fill} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden>
     {children}
   </svg>
 );
@@ -40,6 +40,10 @@ export const IconChevronRight = (p: P) => <S {...p}><path d="M9 18l6-6-6-6" /></
 /** Arrangement: a timeline with clip blocks on staggered lanes. */
 export const IconArrangement = (p: P) => <S {...p}><path d="M3 5v14M3 12h18" strokeWidth="1.6" /><rect x="5" y="6.5" width="5" height="3" rx="1" fill="currentColor" stroke="none" /><rect x="12" y="6.5" width="7" height="3" rx="1" fill="currentColor" stroke="none" /><rect x="7" y="14.5" width="8" height="3" rx="1" fill="currentColor" stroke="none" /></S>;
 export const IconFolderOpen = (p: P) => <S {...p}><path d="M6 14l1.5-5h13.2a1 1 0 0 1 .95 1.3L20 15" /><path d="M3 5a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v1" /><path d="M3 5v12a2 2 0 0 0 2 2h13l2.6-8.4A1 1 0 0 0 19.6 9H6.5a2 2 0 0 0-1.9 1.4L3 15" /></S>;
+/** Synth: two oscillator waves meeting a filter knob. */
+export const IconSynth = (p: P) => <S {...p}><path d="M2 9c2-4 4-4 6 0s4 4 6 0" /><path d="M2 17h5" /><circle cx="14" cy="17" r="2.4" /><path d="M14 17l1.4-1.6" /><path d="M18 13v8M21 11v10" strokeWidth="1.6" /></S>;
+/** Voice/activity meter: rising bars. */
+export const IconActivity = (p: P) => <S {...p}><path d="M3 20h2v-6H3zM9 20h2V8H9zM15 20h2v-9h-2zM21 20h-2V4h2z" fill="currentColor" stroke="none" /></S>;
 
 export const BrandMark = ({ size = 26 }: P) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>

@@ -9,6 +9,7 @@ import Timeline from "./components/Timeline";
 import StepSequencer from "./components/StepSequencer";
 import PianoRoll from "./components/PianoRoll";
 import Mixer from "./components/Mixer";
+import SynthLab from "./components/SynthLab";
 import AIPanel from "./components/AIPanel";
 import Browser from "./components/Browser";
 import RecoveryPrompt from "./components/RecoveryPrompt";
@@ -92,10 +93,14 @@ function Workbench() {
 
       const key = e.key.toLowerCase();
 
-      /* workspace view switching (1 / 2 / 3) */
+      /* workspace view switching (1 / 2 / 3 / 4) */
       if (key === "1") { s.setWorkspaceView("arrangement"); return; }
       if (key === "2") { s.setWorkspaceView("pianoroll"); return; }
       if (key === "3") { s.setWorkspaceView("mixer"); return; }
+      if (key === "4") { s.setWorkspaceView("synth"); return; }
+
+      /* Synth Lab owns the A–K note keys while it's open — don't double-trigger. */
+      if (s.state.workspaceView === "synth") return;
 
       /* drum pads */
       if (key in DRUM_KEYS) {
@@ -211,6 +216,7 @@ function Workbench() {
             {state.workspaceView === "arrangement" && <Timeline />}
             {state.workspaceView === "pianoroll" && (isDrum ? <StepSequencer /> : <PianoRoll />)}
             {state.workspaceView === "mixer" && <Mixer />}
+            {state.workspaceView === "synth" && <SynthLab />}
           </div>
         </main>
 

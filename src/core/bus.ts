@@ -16,6 +16,7 @@
 import { Project } from "../types";
 import { Command, validateCommand } from "./commands";
 import { execCommand } from "./executors";
+import { deserialize } from "./format";
 import { validateProject } from "./validate";
 import { buildDemoProject } from "./seed";
 
@@ -99,6 +100,8 @@ export class CommandBus {
         console.error("[command-bus] executor error", c, err);
       }
     }
+    if (next === before) return; // every command was a no-op — leave history untouched
+    next = { ...next, modifiedAt: Date.now() };
     this.state = next;
     this.undoStack.push({ label, before, commands });
     if (this.undoStack.length > HISTORY_CAP) this.undoStack.shift();
@@ -114,9 +117,11 @@ export class CommandBus {
       const err = validateCommand(c);
       if (err) throw new CommandValidationError((c as { op?: string }).op ?? "?", err);
     }
-    let next = this.state;
+    const before = this.state;
+    let next = before;
     for (const c of commands) next = execCommand(next, c);
-    this.state = next;
+    if (next === before) return;
+    this.state = { ...next, modifiedAt: Date.now() };
     this.emit();
   }
 
@@ -181,7 +186,10 @@ function loadInitialProject(): Project {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const res = validateProject(JSON.parse(raw));
+      // deserialize handles every save generation: the versioned envelope,
+      // legacy raw-Project autosaves, and the old cadence wrapper — the
+      // migration registry upgrades whatever it finds.
+      const res = deserialize(raw);
       if (res.ok) return res.project;
     }
   } catch {

@@ -48,6 +48,8 @@ src/
 │   ├── bus.ts                # CommandBus: dispatch → validate → execute → snapshot → notify
 │   ├── audio.ts              # AudioBackend seam (WebAudio today, Tauri/native later)
 │   ├── validate.ts           # schema validation/sanitization for every loaded project
+│   ├── format.ts             # versioned .open-daw.json format + migration registry
+│   ├── format.test.ts        # unit tests: round-trip deep equality, migrations, errors
 │   ├── seed.ts               # generated demo + starter projects
 │   └── index.ts              # barrel
 ├── state/store.tsx           # UI STATE LAYER — React binding that mirrors the bus
@@ -91,6 +93,58 @@ those calls over IPC to a native engine without touching a single component.
 Design rules: no heavy work on the audio path, no state mutation outside the bus,
 no UI → engine coupling outside the seam, graceful degradation when storage or
 workers are unavailable.
+
+## Project file format
+
+`.open-daw.json` — versioned JSON, defined and implemented in `src/core/format.ts`.
+
+```jsonc
+{
+  "format": "open-daw",          // constant magic
+  "version": 1,                  // integer; bumped on breaking changes
+  "metadata": { "name": "…", "created": "ISO-8601", "modified": "ISO-8601" },
+  "tempo": { "bpm": 120 },
+  "timeSignature": { "numerator": 4, "denominator": 4 },
+  "lengthBars": 16,
+  "key": { "rootMidi": 57, "scale": "minor" },
+  "tracks":  [ { "id", "name", "color", "instrumentId", "volume", "pan",
+                 "mute", "solo", "clipIds", "sourceClipId", "placements[]" } ],
+  "clips":   [ { "id", "name", "lengthBars", "notes[]" } ],
+  "instruments": [ { "id", "kind", "name", "presetId" } ],   // tracks link by id
+  "effects": [ { "id", "trackId", "type": "channel-strip", "params" } ],
+  "automation": [ { "id", "trackId", "param", "points[]" } ],
+  "routing": { "outputs": […], "assignments": […] },
+  "samples": [],                 // reserved — all sound is code-synthesized
+  "presets": []                  // reserved — user presets
+}
+```
+
+- `serialize(project) → string` is a **pure function of state** (timestamps
+  included), so save-then-reload is lossless and deep-equal.
+- `deserialize(json) → { ok, project } | { ok: false, error }` never throws.
+  Malformed envelopes fail **field-by-field with a clear message**
+  (`"tempo.bpm: must be a number"`); files from a future version are rejected
+  with an explicit *"saved by a newer version — update the app"* error.
+- **Migration registry** (`MIGRATIONS`): files older than the current version
+  are walked forward step by step (`v0 → v1 → …`). The registry already
+  upgrades both legacy save shapes this app shipped (raw-Project autosaves and
+  the early `cadence` wrapper), so no user's work breaks on update. Autosave
+  uses the same format, so the registry protects local saves too.
+- Every load path (file import **and** autosave restore) ends in the shared
+  sanitizer (`validateProject`): allow-lists, clamps and size caps apply even
+  to structurally valid files.
+
+## Tests
+
+```bash
+npx vitest run          # unit tests (format round-trip, migrations, errors)
+npm run typecheck       # strict TS across the repo
+npm run build           # production bundle
+```
+
+`src/core/format.test.ts` saves then reloads projects — empty, demo, and
+automation-bearing — and asserts **deep equality**, alongside envelope,
+future-version, malformed-input and migration-registry cases.
 
 ## Security
 

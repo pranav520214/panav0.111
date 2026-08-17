@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Note, uid } from "./types";
 import { StoreProvider, StoreApi, useStore } from "./state/store";
-import { audio } from "./core";
+import { audio, serialize } from "./core";
 import TopBar from "./components/TopBar";
 import Transport from "./components/Transport";
 import Timeline from "./components/Timeline";
@@ -56,11 +56,12 @@ function Workbench() {
     return () => audio.setOnTransport(null);
   }, [state.project]);
 
-  /* autosave (debounced) */
+  /* autosave (debounced) — written in the versioned open-daw format, so an
+   * app update migrates saved work instead of breaking it */
   useEffect(() => {
     const h = window.setTimeout(() => {
       try {
-        localStorage.setItem("cadence.project.v1", JSON.stringify(state.project));
+        localStorage.setItem("cadence.project.v1", serialize(state.project));
         setSavedFlash(true);
         window.setTimeout(() => setSavedFlash(false), 1400);
       } catch { /* storage full/blocked — non-fatal */ }

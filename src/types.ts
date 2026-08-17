@@ -63,14 +63,38 @@ export interface Track {
   placements: Placement[];
 }
 
+export interface TimeSignature {
+  numerator: number;   // beats per bar
+  denominator: number; // beat unit (2, 4, 8, 16)
+}
+
+export type AutomationParam = "volume" | "pan" | "reverb" | "delay" | "cutoff" | "drive";
+
+export interface AutomationEvent {
+  step: number; // absolute 16th-note step on the timeline
+  value: number; // normalized 0..1 (interpreted per param)
+}
+
+export interface AutomationLane {
+  id: string;
+  trackId: string;
+  param: AutomationParam;
+  points: AutomationEvent[];
+}
+
 export interface Project {
   name: string;
   bpm: number;
   rootMidi: number;
   scale: ScaleType;
   lengthBars: number;
+  timeSignature: TimeSignature;
+  automation: AutomationLane[];
   tracks: Track[];
   clips: Record<string, Clip>;
+  /** Epoch ms — surfaced as ISO strings in the file format's metadata block. */
+  createdAt: number;
+  modifiedAt: number;
 }
 
 /* ---------------- command system ----------------

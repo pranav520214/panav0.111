@@ -7,8 +7,12 @@
  * so a tampered or version-skewed save can never crash the engine or the UI. */
 
 import {
-  Clip, InstrumentKind, Note, Placement, Project, ScaleType, Track, uid,
+  AutomationLane, AutomationParam, Clip, InstrumentKind, Note, Placement,
+  Project, ScaleType, TimeSignature, Track, uid,
 } from "../types";
+
+const AUTOMATION_PARAMS = new Set<string>(["volume", "pan", "reverb", "delay", "cutoff", "drive"]);
+const TIME_SIG_UNITS = new Set<number>([2, 4, 8, 16]);
 
 export type ValidationResult =
   | { ok: true; project: Project }
@@ -152,6 +156,39 @@ export function validateProject(raw: unknown): ValidationResult {
     return { ok: false, error: "Project contains no usable tracks" };
   }
 
+  /* time signature — carried by the file format; the timeline currently
+   * renders 4/4 grids, so anything else is preserved but noted as inert */
+  const tsRaw = (typeof p.timeSignature === "object" && p.timeSignature !== null ? p.timeSignature : {}) as Record<string, unknown>;
+  const timeSignature: TimeSignature = {
+    numerator: int(tsRaw.numerator, 2, 16, 4),
+    denominator: TIME_SIG_UNITS.has(Number(tsRaw.denominator)) ? Number(tsRaw.denominator) : 4,
+  };
+
+  /* automation lanes — preserved end-to-end; ids/params allow-listed,
+   * points capped so a hostile file can't balloon memory */
+  const trackIds = new Set(tracks.map((t) => t.id));
+  const automation: AutomationLane[] = [];
+  if (Array.isArray(p.automation)) {
+    for (const ra of p.automation.slice(0, 64)) {
+      if (typeof ra !== "object" || ra === null) continue;
+      const a = ra as Record<string, unknown>;
+      const trackId = typeof a.trackId === "string" && trackIds.has(a.trackId) ? a.trackId : "";
+      const param = typeof a.param === "string" && AUTOMATION_PARAMS.has(a.param) ? (a.param as AutomationParam) : null;
+      if (!trackId || !param) continue;
+      const points = Array.isArray(a.points)
+        ? a.points.slice(0, 512).flatMap((rp): { step: number; value: number }[] => {
+            if (typeof rp !== "object" || rp === null) return [];
+            const pt = rp as Record<string, unknown>;
+            if (typeof pt.step !== "number" || typeof pt.value !== "number") return [];
+            return [{ step: int(pt.step, 0, 16 * 64, 0), value: num(pt.value, 0, 1, 0) }];
+          })
+        : [];
+      automation.push({ id: id(a.id, "auto"), trackId, param, points });
+    }
+  }
+
+  const now = Date.now();
+
   return {
     ok: true,
     project: {
@@ -160,19 +197,16 @@ export function validateProject(raw: unknown): ValidationResult {
       rootMidi: int(p.rootMidi, 36, 84, 57),
       scale,
       lengthBars,
+      timeSignature,
+      automation,
       tracks,
       clips,
+      createdAt: typeof p.createdAt === "number" && Number.isFinite(p.createdAt) && p.createdAt >= 0 ? p.createdAt : now,
+      modifiedAt: typeof p.modifiedAt === "number" && Number.isFinite(p.modifiedAt) && p.modifiedAt >= 0 ? p.modifiedAt : now,
     },
   };
 }
 
-/** Parse a downloaded/uploaded .cadence.json file. Never throws. */
-export function parseProjectFile(text: string): ValidationResult {
-  let json: unknown;
-  try {
-    json = JSON.parse(text.slice(0, 8 * 1024 * 1024)); // cap: 8 MB
-  } catch {
-    return { ok: false, error: "File is not valid JSON" };
-  }
-  return validateProject(json);
-}
+/* File parsing lives in src/core/format.ts (versioned envelope + migrations).
+ * validateProject() above is the shared sanitizer that both the format layer
+ * and the autosave restore path apply to untrusted data. */

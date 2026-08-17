@@ -41,14 +41,19 @@ export function buildDemoProject(): Project {
   pad.volume = 0.6;
   pad.pan = 0.1;
 
+  const now = Date.now();
   return {
     name: "First Light",
     bpm: 100,
     rootMidi,
     scale: "minor",
     lengthBars: 8,
+    timeSignature: { numerator: 4, denominator: 4 },
+    automation: [],
     tracks: [drums, bass, keys, lead, pad],
     clips,
+    createdAt: now,
+    modifiedAt: now,
   };
 }
 
@@ -67,13 +72,18 @@ export function buildEmptyProject(): Project {
     clips[t.clipIds[0]] = { id: t.clipIds[0], name: `${t.name} 1`, lengthBars: 1, notes: [] };
     return t;
   });
+  const now = Date.now();
   return {
     name: "Untitled Session",
     bpm: 110,
     rootMidi: 57,
     scale: "minor",
     lengthBars: 8,
+    timeSignature: { numerator: 4, denominator: 4 },
+    automation: [],
     tracks,
     clips,
+    createdAt: now,
+    modifiedAt: now,
   };
 }

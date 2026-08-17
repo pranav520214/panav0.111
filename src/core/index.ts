@@ -8,3 +8,4 @@ export * from "./bus";
 export * from "./audio";
 export * from "./seed";
 export * from "./validate";
+export * from "./format";

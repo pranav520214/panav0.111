@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Mode } from "../types";
 import { useStore } from "../state/store";
-import { audio, buildEmptyProject, parseProjectFile } from "../core";
+import { audio, buildEmptyProject, parseProjectFile, serialize } from "../core";
 import { BrandMark, IconDownload, IconFolderOpen, IconPlus, IconRedo, IconSave, IconUndo } from "./icons";
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
@@ -48,15 +48,14 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
   const fileRef = useRef<HTMLInputElement>(null);
 
   const saveFile = () => {
-    const payload = JSON.stringify({ app: "cadence", format: 1, ...state.project }, null, 1);
-    const blob = new Blob([payload], { type: "application/json" });
+    const blob = new Blob([serialize(state.project)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${state.project.name.replace(/[^\w\- ]+/g, "").trim() || "session"}.cadence.json`;
+    a.download = `${state.project.name.replace(/[^\w\- ]+/g, "").trim() || "session"}.open-daw.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    onToast("Project file saved — it can be re-opened here");
+    onToast("Project saved as .open-daw.json — open it again any time");
   };
 
   const openFile = async (file: File) => {

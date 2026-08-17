@@ -44,6 +44,12 @@ export const IconFolderOpen = (p: P) => <S {...p}><path d="M6 14l1.5-5h13.2a1 1 
 export const IconSynth = (p: P) => <S {...p}><path d="M2 9c2-4 4-4 6 0s4 4 6 0" /><path d="M2 17h5" /><circle cx="14" cy="17" r="2.4" /><path d="M14 17l1.4-1.6" /><path d="M18 13v8M21 11v10" strokeWidth="1.6" /></S>;
 /** Voice/activity meter: rising bars. */
 export const IconActivity = (p: P) => <S {...p}><path d="M3 20h2v-6H3zM9 20h2V8H9zM15 20h2v-9h-2zM21 20h-2V4h2z" fill="currentColor" stroke="none" /></S>;
+/** Reverse playback. */
+export const IconReverse = (p: P) => <S {...p} fill="currentColor"><path d="M11 5v14L3 12z" stroke="none" /><path d="M21 5v14l-8-7z" stroke="none" /></S>;
+/** Slice / scissors. */
+export const IconScissors = (p: P) => <S {...p}><circle cx="6" cy="6" r="2.6" /><circle cx="6" cy="18" r="2.6" /><path d="M8.2 7.6L20 19M8.2 16.4L20 5" /></S>;
+/** Upload arrow into a tray. */
+export const IconUpload = (p: P) => <S {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 8l5-5 5 5" /><path d="M12 3v12" /></S>;
 
 export const BrandMark = ({ size = 26 }: P) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>

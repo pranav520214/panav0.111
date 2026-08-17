@@ -1,5 +1,241 @@
+import { useEffect, useRef, useState } from "react";
+import { Note, uid } from "./types";
+import { StoreProvider, StoreApi, useStore } from "./state/store";
+import { getEngine } from "./audio/engine";
+import TopBar from "./components/TopBar";
+import Transport from "./components/Transport";
+import Timeline from "./components/Timeline";
+import StepSequencer from "./components/StepSequencer";
+import PianoRoll from "./components/PianoRoll";
+import Mixer from "./components/Mixer";
+import AIPanel from "./components/AIPanel";
+import Browser from "./components/Browser";
+
+const NOTE_KEYS: Record<string, number> = { a: 0, w: 1, s: 2, e: 3, d: 4, f: 5, t: 6, g: 7, y: 8, h: 9, u: 10, j: 11, k: 12, o: 13, l: 14, p: 15 };
+const DRUM_KEYS: Record<string, number> = { z: 0, x: 1, c: 2, v: 3, b: 4 };
+
+interface Toast { id: number; msg: string; }
+let toastId = 0;
+
 export default function App() {
   return (
-    <div/>
+    <StoreProvider>
+      <Workbench />
+    </StoreProvider>
+  );
+}
+
+function Workbench() {
+  const store = useStore();
+  const { state } = store;
+  const storeRef = useRef<StoreApi>(store);
+  storeRef.current = store;
+
+  const [playing, setPlaying] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [loop, setLoop] = useState(true);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const heldNotes = useRef(new Map<string, { noteId: string; clipId: string; startStep: number; voice: { stop: () => void } }>());
+  const recRef = useRef(false);
+  recRef.current = recording;
+
+  const onToast = (msg: string) => {
+    const id = toastId++;
+    setToasts((t) => [...t.slice(-2), { id, msg }]);
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3000);
+  };
+  const toastRef = useRef(onToast);
+  toastRef.current = onToast;
+
+  /* keep the audio engine in sync with the project graph */
+  useEffect(() => {
+    const engine = getEngine();
+    engine.setProject(state.project);
+    engine.onTransport = setPlaying;
+    return () => { engine.onTransport = null; };
+  }, [state.project]);
+
+  /* autosave (debounced) */
+  useEffect(() => {
+    const h = window.setTimeout(() => {
+      try {
+        localStorage.setItem("cadence.project.v1", JSON.stringify(state.project));
+        setSavedFlash(true);
+        window.setTimeout(() => setSavedFlash(false), 1400);
+      } catch { /* storage full/blocked — non-fatal */ }
+    }, 700);
+    return () => window.clearTimeout(h);
+  }, [state.project]);
+
+  /* keyboard performance + shortcuts */
+  useEffect(() => {
+    const isFormEl = (el: EventTarget | null) =>
+      el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+
+    const down = (e: KeyboardEvent) => {
+      if (isFormEl(e.target)) return;
+      const engine = getEngine();
+      const s = storeRef.current;
+
+      if (e.code === "Space") {
+        // let focused buttons activate natively instead of double-toggling transport
+        if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
+        e.preventDefault();
+        if (engine.playing) engine.pause(); else engine.play();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) s.redo(); else s.undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        s.redo();
+        return;
+      }
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+
+      /* drum pads */
+      if (key in DRUM_KEYS) {
+        const drumTrack = s.state.project.tracks.find((t) => t.instrument === "drumkit");
+        if (drumTrack) engine.previewNote(drumTrack.id, DRUM_KEYS[key], 0.95, 0.5);
+        return;
+      }
+
+      /* piano keys */
+      if (key in NOTE_KEYS && !heldNotes.current.has(key)) {
+        const proj = s.state.project;
+        const selected = proj.tracks.find((t) => t.id === s.state.selectedTrackId);
+        const melodic = selected && selected.instrument !== "drumkit"
+          ? selected
+          : proj.tracks.find((t) => t.instrument !== "drumkit");
+        if (!melodic) return;
+        const midi = proj.rootMidi + 12 + NOTE_KEYS[key];
+        const voice = engine.previewNote(melodic.id, midi, 0.85);
+
+        /* record into the open clip */
+        if (recRef.current && engine.playing) {
+          const clipId = melodic.id === s.state.selectedTrackId && s.state.editorClipId && melodic.clipIds.includes(s.state.editorClipId)
+            ? s.state.editorClipId
+            : melodic.sourceClipId;
+          const clip = proj.clips[clipId];
+          if (clip) {
+            const clipSteps = clip.lengthBars * 16;
+            const startStep = Math.floor(engine.getCurrentStep()) % clipSteps;
+            const noteId = uid("n");
+            const note: Note = { id: noteId, pitch: midi, start: startStep, dur: 1, vel: 0.85 };
+            s.applySilent([{ op: "add_notes", clipId, notes: [note] }]);
+            heldNotes.current.set(key, { noteId, clipId, startStep, voice });
+            return;
+          }
+        }
+        heldNotes.current.set(key, { noteId: "", clipId: "", startStep: 0, voice });
+      }
+    };
+
+    const up = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const held = heldNotes.current.get(key);
+      if (!held) return;
+      heldNotes.current.delete(key);
+      held.voice.stop();
+      /* close the recorded note's duration */
+      if (held.noteId) {
+        const s = storeRef.current;
+        const engine = getEngine();
+        const clip = s.state.project.clips[held.clipId];
+        if (clip) {
+          const clipSteps = clip.lengthBars * 16;
+          const now = Math.floor(engine.getCurrentStep()) % clipSteps;
+          const dur = Math.max(1, Math.min(clipSteps, now - held.startStep || 1));
+          s.applySilent([{ op: "set_clip_content", clipId: held.clipId, notes: clip.notes.map((n) => (n.id === held.noteId ? { ...n, dur } : n)) }]);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
+
+  const togglePlay = () => {
+    const engine = getEngine();
+    if (engine.playing) engine.pause(); else engine.play();
+  };
+
+  const toggleRecord = () => {
+    const engine = getEngine();
+    if (!recording) {
+      storeRef.current.snapshot("Take: recorded notes");
+      setRecording(true);
+      if (!engine.playing) engine.play();
+      onToast("Recording — play the A–K keys; notes land in the open clip");
+    } else {
+      setRecording(false);
+      onToast("Recording stopped");
+    }
+  };
+
+  const selectedTrack = state.project.tracks.find((t) => t.id === state.selectedTrackId);
+  const isDrum = selectedTrack?.instrument === "drumkit";
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden relative">
+      <TopBar onToast={onToast} playing={playing} />
+
+      <div className="flex-1 min-h-0 flex gap-2 p-2">
+        <Browser onToast={onToast} />
+
+        <main className="flex-1 min-w-0 flex flex-col gap-2">
+          <Transport
+            playing={playing}
+            recording={recording}
+            onTogglePlay={togglePlay}
+            onStop={() => getEngine().stop()}
+            onToggleRecord={toggleRecord}
+            loop={loop}
+            onToggleLoop={() => { setLoop((l) => !l); getEngine().loop = !loop; }}
+          />
+          <Timeline />
+          {isDrum ? <StepSequencer /> : <PianoRoll />}
+        </main>
+
+        <AIPanel />
+      </div>
+
+      <div className="px-2 pb-1.5 shrink-0">
+        <Mixer />
+      </div>
+
+      {/* status bar */}
+      <footer className="h-7 shrink-0 border-t border-ink-700 bg-ink-900/90 flex items-center gap-4 px-3 text-[10px] font-mono text-ink-400">
+        <span className={`flex items-center gap-1.5 ${playing ? "text-teal" : ""}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${playing ? "bg-teal shadow-[0_0_6px_rgba(62,207,178,0.9)]" : "bg-ink-600"}`} />
+          {playing ? (recording ? "REC · live" : "playing") : "ready"}
+        </span>
+        <span className="hidden sm:inline">{state.project.lengthBars} bars · {state.project.bpm} BPM</span>
+        <span className="flex-1 text-center transition-opacity duration-300">
+          {savedFlash ? <span className="text-teal">autosaved ✓</span> : <span className="opacity-60">autosave on</span>}
+        </span>
+        <span className="hidden md:inline opacity-80">Space play · A–K piano · Z–B drums · Ctrl+Z undo</span>
+        <span className="text-amber-glow/80 uppercase tracking-widest">{state.mode}</span>
+      </footer>
+
+      {/* toasts */}
+      <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center pointer-events-none">
+        {toasts.map((t) => (
+          <div key={t.id} className="toast-anim bg-ink-800 border border-ink-600 text-ink-100 text-[12px] font-semibold px-4 py-2 rounded-lg shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+            {t.msg}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

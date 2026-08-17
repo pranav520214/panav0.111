@@ -10,6 +10,7 @@ import StepSequencer from "./components/StepSequencer";
 import PianoRoll from "./components/PianoRoll";
 import Mixer from "./components/Mixer";
 import SynthLab from "./components/SynthLab";
+import GrooveBox from "./components/GrooveBox";
 import AIPanel from "./components/AIPanel";
 import Browser from "./components/Browser";
 import RecoveryPrompt from "./components/RecoveryPrompt";
@@ -98,9 +99,10 @@ function Workbench() {
       if (key === "2") { s.setWorkspaceView("pianoroll"); return; }
       if (key === "3") { s.setWorkspaceView("mixer"); return; }
       if (key === "4") { s.setWorkspaceView("synth"); return; }
+      if (key === "5") { s.setWorkspaceView("groove"); return; }
 
-      /* Synth Lab owns the A–K note keys while it's open — don't double-trigger. */
-      if (s.state.workspaceView === "synth") return;
+      /* Synth Lab & Groove Box own the note/pad keys while open — don't double-trigger. */
+      if (s.state.workspaceView === "synth" || s.state.workspaceView === "groove") return;
 
       /* drum pads */
       if (key in DRUM_KEYS) {
@@ -217,6 +219,7 @@ function Workbench() {
             {state.workspaceView === "pianoroll" && (isDrum ? <StepSequencer /> : <PianoRoll />)}
             {state.workspaceView === "mixer" && <Mixer />}
             {state.workspaceView === "synth" && <SynthLab />}
+            {state.workspaceView === "groove" && <GrooveBox />}
           </div>
         </main>
 

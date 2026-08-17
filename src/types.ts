@@ -16,7 +16,7 @@ export type ScaleType = "minor" | "major";
 export type InstrumentKind = "drumkit" | "bass" | "keys" | "pluck" | "pad";
 
 /** Center workspace views — swappable, one active at a time. */
-export type WorkspaceView = "arrangement" | "pianoroll" | "mixer" | "synth";
+export type WorkspaceView = "arrangement" | "pianoroll" | "mixer" | "synth" | "groove";
 
 export const STEPS_PER_BAR = 16;
 

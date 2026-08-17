@@ -18,6 +18,7 @@ export default function WorkspaceSwitcher() {
     { id: "pianoroll", label: isDrum ? "Drum Grid" : "Piano Roll", icon: isDrum ? <IconDrum size={15} /> : <IconPiano size={15} />, hint: "Edit the notes of the selected clip" },
     { id: "mixer", label: "Mixer", icon: <IconMixer size={15} />, hint: "Levels, pan, sends & effects" },
     { id: "synth", label: "Synth Lab", icon: <IconSynth size={15} />, hint: "Subtractive synth — presets, patch editor & voice headroom" },
+    { id: "groove", label: "Groove Box", icon: <IconDrum size={15} />, hint: "Step-sequencer drum machine — patterns, swing & song chain" },
   ];
 
   const activeIndex = Math.max(0, tabs.findIndex((t) => t.id === state.workspaceView));

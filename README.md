@@ -33,7 +33,8 @@ Then try the copilot: *"make a beat"*, *"add a melody"*, *"more energy"*,
 *"change key to C minor"*, *"arrange my song"*.
 
 **Keyboard**: `Space` play/pause · `A W S E D F T G Y H U J K` live piano (records when
-the red button is armed) · `Z X C V B` drum pads · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo.
+the red button is armed) · `Z X C V B` drum pads · `1–5` switch workspace
+(Arrangement / Piano Roll / Mixer / Synth Lab / Groove Box) · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo.
 
 ## Architecture
 
@@ -60,6 +61,7 @@ src/
 │   ├── voicePool.ts          # bounded polyphony with oldest/quietest stealing
 │   ├── profiler.ts           # allocation-free per-callback CPU profiler
 │   ├── subsynth.ts           # subtractive synth + 8 factory presets + voice-headroom profiler
+│   ├── drumbox.ts            # step-sequencer drum machine (7 slots, swing, song chain)
 │   └── synth.ts              # code-synthesized voices, drum synthesis, WAV encoder
 ├── ai/                       # AI LAYER — sandboxed worker → Command[] → the same bus
 │   ├── intent.ts             # deterministic MIDI-only intent parser
@@ -143,6 +145,25 @@ modes with glide (portamento). Unison voices share a single filter + amp envelop
 - The Synth Lab workspace view (switcher → *Synth Lab*, or press `4`) is fully
   interactive: presets, a playable keyboard (click/drag or the A–K row), live patch
   editing, and the headroom profiler.
+
+### The Groove Box (`src/audio/drumbox.ts` → Groove Box view)
+
+A self-contained step-sequencer drum machine, independent of the arrangement engine
+(like a hardware groove box — it owns its AudioContext and transport):
+
+- **7 synthesized drum slots** — kick, snare, closed hat, open hat, clap, perc and an
+  808 sub. All code-synthesized: **no samples, no licensed content**.
+- **8 / 16 / 32-step grid** with **per-step on/off** *and* **per-step velocity**
+  (toggle in *velocity* mode and click/drag — cell fill height shows loudness).
+- **Swing / groove** — delays off-beat 16ths from straight (0%) to heavily swung.
+- **Patterns** — named pattern slots, duplicate, clear, delete; each keeps its own step
+  count and swing. **Three original starter patterns**: Boom Bap, Trap, House.
+- **Song mode** — chain patterns into a sequence (double-click a tab to append);
+  playback runs the chain top→bottom and loops, with the active section highlighted.
+- Scheduling uses the **WebAudio-clock lookahead** (the audio clock is the source of
+  truth, not `setInterval`), so timing stays tight at any tempo.
+- The Groove Box view is the switcher tab or press `5`; it reads the project BPM and
+  writes tempo changes back through the command bus, so it stays in sync with the DAW.
 
 ## Project file format
 

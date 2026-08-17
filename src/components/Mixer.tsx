@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Track, TrackFx, dbLabel } from "../types";
 import { useStore } from "../state/store";
-import { audio } from "../core";
+import { audio, RETURN_DEFS } from "../core";
 import { IconMixer } from "./icons";
 
 const cutoffToSlider = (f: number) => Math.round((100 * Math.log(f / 300)) / Math.log(60));
@@ -10,30 +10,35 @@ const sliderToCutoff = (v: number) => Math.round(300 * Math.pow(60, v / 100));
 export default function Mixer() {
   const { state, apply, applySilent, snapshot, gate } = useStore();
   const p = state.project;
-  const meterRefs = useRef(new Map<string, HTMLDivElement>());
-  const masterRef = useRef<HTMLDivElement>(null);
-  const smooth = useRef(new Map<string, number>());
+  /* Meters are read-only realtime telemetry from the audio backend (never the
+   * undo stack). All *writes* (volume/pan/mute/solo/fx) go through the bus. */
+  const rmsRefs = useRef(new Map<string, HTMLDivElement>());
+  const peakRefs = useRef(new Map<string, HTMLDivElement>());
+  const returnRefs = useRef(new Map<string, HTMLDivElement>());
+  const masterRmsRef = useRef<HTMLDivElement>(null);
+  const masterPeakRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const engine = audio;
     let raf = 0;
     const tick = () => {
+      // channel strips: RMS fill + peak cap (post-fader, reflects mute/solo)
       for (const t of p.tracks) {
-        const el = meterRefs.current.get(t.id);
-        if (!el) continue;
-        const raw = engine.getTrackLevel(t.id);
-        const prev = smooth.current.get(t.id) ?? 0;
-        const v = Math.max(raw, prev * 0.86);
-        smooth.current.set(t.id, v);
-        el.style.height = `${Math.min(100, v * 260)}%`;
+        const m = engine.getChannelMeter(t.id);
+        const rmsEl = rmsRefs.current.get(t.id);
+        const peakEl = peakRefs.current.get(t.id);
+        if (rmsEl) rmsEl.style.height = `${Math.min(100, m.rms * 260)}%`;
+        if (peakEl) peakEl.style.bottom = `${Math.min(100, m.peak * 260)}%`;
       }
-      if (masterRef.current) {
-        const raw = engine.getMasterLevel();
-        const prev = smooth.current.get("__master") ?? 0;
-        const v = Math.max(raw, prev * 0.86);
-        smooth.current.set("__master", v);
-        masterRef.current.style.height = `${Math.min(100, v * 240)}%`;
+      // return buses
+      for (const r of engine.getReturnInfos()) {
+        const el = returnRefs.current.get(r.id);
+        if (el) el.style.height = `${Math.min(100, r.level * 300)}%`;
       }
+      // master bus
+      const mm = engine.getMasterMeter();
+      if (masterRmsRef.current) masterRmsRef.current.style.height = `${Math.min(100, mm.rms * 240)}%`;
+      if (masterPeakRef.current) masterPeakRef.current.style.bottom = `${Math.min(100, mm.peak * 240)}%`;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -62,16 +67,50 @@ export default function Mixer() {
 
       <div className="flex-1 min-h-0 flex gap-2 overflow-x-auto px-2.5 py-2">
           {p.tracks.map((t) => (
-            <Strip key={t.id} t={t} fxOn={fxOn} extended={extended} meterEl={(el) => { if (el) meterRefs.current.set(t.id, el); else meterRefs.current.delete(t.id); }} volGesture={volGesture} apply={apply} applySilent={applySilent} snapshot={snapshot} />
+            <Strip
+              key={t.id}
+              t={t}
+              fxOn={fxOn}
+              extended={extended}
+              rmsEl={(el) => { if (el) rmsRefs.current.set(t.id, el); else rmsRefs.current.delete(t.id); }}
+              peakEl={(el) => { if (el) peakRefs.current.set(t.id, el); else peakRefs.current.delete(t.id); }}
+              volGesture={volGesture}
+              apply={apply}
+              applySilent={applySilent}
+              snapshot={snapshot}
+            />
           ))}
+
+          {/* return buses (sends destinations) */}
+          {fxOn && (
+            <div className="flex gap-2 shrink-0 border-l border-ink-700/60 pl-2">
+              {RETURN_DEFS.map((r) => (
+                <div key={r.id} className="w-[64px] rounded-lg border border-ink-700 bg-ink-800/50 flex flex-col overflow-hidden">
+                  <div className="h-[3px] bg-ink-600" />
+                  <div className="px-1.5 pt-1.5 text-[9px] font-bold text-ink-300 uppercase tracking-wide truncate" title={`${r.name} return bus`}>{r.name}</div>
+                  <div className="flex-1 min-h-0 flex items-stretch px-1.5 py-1.5">
+                    <div className="w-2 rounded-sm bg-ink-950 border border-ink-700 overflow-hidden flex items-end flex-1">
+                      <div
+                        ref={(el) => { if (el) returnRefs.current.set(r.id, el); else returnRefs.current.delete(r.id); }}
+                        className="w-full rounded-sm"
+                        style={{ height: "0%", background: "linear-gradient(180deg, #a78bfa, #58b7f5)" }}
+                      />
+                    </div>
+                  </div>
+                  <div className="px-1.5 pb-1.5 text-[8px] font-mono text-ink-400 text-center">return</div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* master */}
           <div className="w-[104px] shrink-0 rounded-lg border border-ink-700 bg-ink-800/70 flex flex-col overflow-hidden">
             <div className="h-[3px] bg-gradient-to-r from-teal via-amber-glow to-coral" />
             <div className="px-2 pt-1.5 text-[11px] font-bold text-ink-100">Master</div>
             <div className="flex-1 min-h-0 flex items-stretch gap-2 px-2.5 py-1.5">
-              <div className="w-2.5 rounded-sm bg-ink-950 border border-ink-700 overflow-hidden flex items-end">
-                <div ref={masterRef} className="w-full rounded-sm" style={{ height: "0%", background: "linear-gradient(180deg, #ff6f61, #ffb454 45%, #3ecfb2)" }} />
+              <div className="w-2.5 rounded-sm bg-ink-950 border border-ink-700 overflow-hidden flex items-end relative">
+                <div ref={masterRmsRef} className="w-full rounded-sm" style={{ height: "0%", background: "linear-gradient(180deg, #ff6f61, #ffb454 45%, #3ecfb2)" }} />
+                <div ref={masterPeakRef} className="absolute left-0 right-0 h-[2px] bg-ink-100" style={{ bottom: "0%" }} />
               </div>
               <div className="flex-1 flex flex-col justify-center gap-1.5 text-[9px] font-mono text-ink-400">
                 <div className="text-teal">LIMITER ON</div>
@@ -87,12 +126,13 @@ export default function Mixer() {
 }
 
 function Strip({
-  t, fxOn, extended, meterEl, volGesture, apply, applySilent, snapshot,
+  t, fxOn, extended, rmsEl, peakEl, volGesture, apply, applySilent, snapshot,
 }: {
   t: Track;
   fxOn: boolean;
   extended: boolean;
-  meterEl: (el: HTMLDivElement | null) => void;
+  rmsEl: (el: HTMLDivElement | null) => void;
+  peakEl: (el: HTMLDivElement | null) => void;
   volGesture: (t: Track, v: number) => void;
   apply: (label: string, cmds: Parameters<ReturnType<typeof useStore>["apply"]>[1]) => void;
   applySilent: (cmds: Parameters<ReturnType<typeof useStore>["applySilent"]>[0]) => void;
@@ -123,9 +163,10 @@ function Strip({
       </div>
 
       <div className="flex-1 min-h-0 flex items-stretch gap-2 px-2.5 py-1.5">
-        {/* meter */}
-        <div className="w-2 rounded-sm bg-ink-950 border border-ink-700 overflow-hidden flex items-end">
-          <div ref={meterEl} className="w-full rounded-sm" style={{ height: "0%", background: `linear-gradient(180deg, #ff6f61, ${t.color} 45%, ${t.color}66)` }} />
+        {/* meter: RMS fill + peak cap (post-fader, so it reflects volume & mute/solo) */}
+        <div className="w-2 rounded-sm bg-ink-950 border border-ink-700 overflow-hidden flex items-end relative">
+          <div ref={rmsEl} className="w-full rounded-sm" style={{ height: "0%", background: `linear-gradient(180deg, #ff6f61, ${t.color} 45%, ${t.color}66)` }} />
+          <div ref={peakEl} className="absolute left-0 right-0 h-[2px] bg-ink-100" style={{ bottom: "0%" }} />
         </div>
 
         <div className="flex-1 flex flex-col items-center min-h-0">

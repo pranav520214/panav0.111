@@ -20,21 +20,11 @@ import { InstrumentKind, Note, Project, Track } from "../types";
 import { AudioProfiler, ProfilerStats } from "./profiler";
 import { TransportClock } from "./scheduler";
 import { VoicePool } from "./voicePool";
-import { encodeWav, makeDriveCurve, makeImpulse, playDrum, playNote } from "./synth";
-
-interface TrackNodes {
-  input: GainNode;
-  filter: BiquadFilterNode;
-  shaper: WaveShaperNode;
-  pan: StereoPannerNode;
-  out: GainNode;
-  analyser: AnalyserNode;
-  delaySend: GainNode;
-  delay: DelayNode;
-  reverbSend: GainNode;
-  lastDrive: number;
-  levelBuf: Uint8Array;
-}
+import {
+  MixerEngine, MeterReading, ReturnInfo,
+  buildChannel, buildReturn, buildMaster, RETURN_DEFS, isAudible, soloActive,
+} from "./mixer";
+import { encodeWav, playDrum, playNote } from "./synth";
 
 export const DEFAULT_MAX_POLYPHONY = 32;
 
@@ -46,10 +36,10 @@ export const DEFAULT_MAX_POLYPHONY = 32;
 export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note) => void): void {
   const total = p.lengthBars * 16;
   const s = ((absStep % total) + total) % total;
-  const soloAny = p.tracks.some((t) => t.solo);
+  // Solo/mute semantics live in the mixer (single source of truth).
+  const anySolo = soloActive(p.tracks);
   for (const t of p.tracks) {
-    const audible = soloAny ? t.solo : !t.mute;
-    if (!audible) continue;
+    if (!isAudible(t, anySolo)) continue;
     for (const pl of t.placements) {
       const clip = p.clips[pl.clipId];
       if (!clip) continue;
@@ -62,11 +52,7 @@ export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note)
 
 class CadenceEngine {
   ctx: AudioContext | null = null;
-  private busIn!: GainNode;
-  private comp!: DynamicsCompressorNode;
-  private masterAnalyser!: AnalyserNode;
-  private reverb!: ConvolverNode;
-  private nodes = new Map<string, TrackNodes>();
+  private mixer: MixerEngine | null = null;
   private project: Project | null = null;
 
   /* real-time core */
@@ -79,7 +65,6 @@ class CadenceEngine {
   private stoppedStep = 0;
   private recordArmed = false;
   private loadEma = 0;
-  private masterBuf: Uint8Array = new Uint8Array(2048);
 
   onTransport: ((playing: boolean) => void) | null = null;
 
@@ -88,25 +73,10 @@ class CadenceEngine {
     if (!this.ctx) {
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new Ctx();
-      this.busIn = this.ctx.createGain();
-      this.busIn.gain.value = 0.9;
-      this.comp = this.ctx.createDynamicsCompressor();
-      this.comp.threshold.value = -10;
-      this.comp.knee.value = 22;
-      this.comp.ratio.value = 3.5;
-      this.comp.attack.value = 0.004;
-      this.comp.release.value = 0.18;
-      this.masterAnalyser = this.ctx.createAnalyser();
-      this.masterAnalyser.fftSize = 2048;
-      this.busIn.connect(this.comp);
-      this.comp.connect(this.masterAnalyser);
-      this.masterAnalyser.connect(this.ctx.destination);
-      this.reverb = this.ctx.createConvolver();
-      this.reverb.buffer = makeImpulse(this.ctx);
-      const revGain = this.ctx.createGain();
-      revGain.gain.value = 0.9;
-      this.reverb.connect(revGain);
-      revGain.connect(this.busIn);
+
+      /* Mixer: channel strips, return buses, master bus and metering. The engine
+       * only schedules notes into it; it never builds or touches audio nodes. */
+      this.mixer = new MixerEngine(this.ctx);
 
       /* Voice pool: bounded, stealing, pre-bound builder (no per-note closures). */
       this.pool = new VoicePool(this.ctx, DEFAULT_MAX_POLYPHONY);
@@ -127,7 +97,7 @@ class CadenceEngine {
       );
       this.clock.loop = this.loop;
 
-      if (this.project) this.syncTracks(this.project);
+      if (this.project) this.mixer.setProject(this.project);
     }
     return this.ctx;
   }
@@ -136,84 +106,9 @@ class CadenceEngine {
     const prev = this.project;
     this.project = p;
     if (!this.ctx) return;
-    this.syncTracks(p);
+    this.mixer?.setProject(p);
     // Re-anchor the grid on tempo change so playback stays glitch-free.
     if (this.clock && prev && prev.bpm !== p.bpm) this.clock.setStepDur(this.stepDur());
-  }
-
-  private syncTracks(p: Project): void {
-    const ctx = this.ctx!;
-    void ctx;
-    const alive = new Set(p.tracks.map((t) => t.id));
-    for (const [id, n] of this.nodes) {
-      if (!alive.has(id)) {
-        try { n.input.disconnect(); n.out.disconnect(); n.analyser.disconnect(); } catch { /* noop */ }
-        this.nodes.delete(id);
-      }
-    }
-    for (const t of p.tracks) {
-      let n = this.nodes.get(t.id);
-      if (!n) {
-        n = this.buildTrack();
-        this.nodes.set(t.id, n);
-      }
-      this.applyTrackParams(t, n);
-    }
-  }
-
-  private buildTrack(): TrackNodes {
-    const ctx = this.ctx!;
-    const input = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.value = 18000;
-    const shaper = ctx.createWaveShaper();
-    shaper.curve = makeDriveCurve(0);
-    shaper.oversample = "2x";
-    const dry = ctx.createGain();
-    const pan = ctx.createStereoPanner();
-    const out = ctx.createGain();
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    const delaySend = ctx.createGain();
-    delaySend.gain.value = 0;
-    const delay = ctx.createDelay(1.5);
-    delay.delayTime.value = 0.29;
-    const fb = ctx.createGain();
-    fb.gain.value = 0.34;
-    const reverbSend = ctx.createGain();
-    reverbSend.gain.value = 0;
-
-    input.connect(filter);
-    filter.connect(shaper);
-    shaper.connect(dry);
-    dry.connect(pan);
-    pan.connect(out);
-    out.connect(analyser);
-    analyser.connect(this.busIn);
-    shaper.connect(delaySend);
-    delaySend.connect(delay);
-    delay.connect(fb);
-    fb.connect(delay);
-    delay.connect(pan);
-    shaper.connect(reverbSend);
-    reverbSend.connect(this.reverb);
-
-    return { input, filter, shaper, pan, out, analyser, delaySend, delay, reverbSend, lastDrive: 0, levelBuf: new Uint8Array(512) };
-  }
-
-  private applyTrackParams(t: Track, n: TrackNodes): void {
-    const ctx = this.ctx!;
-    const now = ctx.currentTime;
-    n.out.gain.setTargetAtTime(t.volume, now, 0.02);
-    n.pan.pan.setTargetAtTime(t.pan, now, 0.02);
-    n.filter.frequency.setTargetAtTime(t.fx.cutoff, now, 0.02);
-    n.delaySend.gain.setTargetAtTime(t.fx.delay * 0.55, now, 0.02);
-    n.reverbSend.gain.setTargetAtTime(t.fx.reverb * 0.7, now, 0.02);
-    if (Math.abs(t.fx.drive - n.lastDrive) > 0.005) {
-      n.shaper.curve = makeDriveCurve(t.fx.drive);
-      n.lastDrive = t.fx.drive;
-    }
   }
 
   /* ---------------- transport (the only surface the UI drives) ---------------- */
@@ -310,7 +205,7 @@ class CadenceEngine {
     // Per-step note walk. `emit` is one closure per musical step (not per audio
     // buffer); everything inside it routes primitives into the pre-bound pool.
     stepNotes(p, abs, (t, n) => {
-      const input = this.nodes.get(t.id)?.input;
+      const input = this.mixer?.getInput(t.id) ?? null;
       if (!input) return;
       const dur = t.instrument === "drumkit" ? 0.4 : Math.max(0.06, n.dur * sd);
       pool.trigger(input, time, dur, n.vel, t.instrument as InstrumentKind, n.pitch);
@@ -331,8 +226,8 @@ class CadenceEngine {
     void ctx.resume();
     const p = this.project;
     const t = p?.tracks.find((tr) => tr.id === trackId);
-    const input = this.nodes.get(trackId)?.input ?? null;
-    const dest = input ?? this.busIn;
+    const input = this.mixer?.getInput(trackId) ?? null;
+    const dest = input ?? this.mixer?.masterInput ?? ctx.destination;
     if (this.ctx && this.ctx.state === "suspended") void this.ctx.resume();
     const amp = ctx.createGain();
     amp.connect(dest);
@@ -353,24 +248,38 @@ class CadenceEngine {
     };
   }
 
-  /* ---------------- metering & diagnostics (pre-allocated, allocation-free) ---------------- */
+  /* ---------------- metering & diagnostics (delegated to the mixer engine) ---------------- */
+
+  /** Peak + RMS for a channel's post-fader tap (reflects volume and mute/solo). */
+  getChannelMeter(trackId: string): MeterReading {
+    return this.mixer?.getChannelMeter(trackId) ?? { peak: 0, rms: 0 };
+  }
+
+  getMasterMeter(): MeterReading {
+    return this.mixer?.getMasterMeter() ?? { peak: 0, rms: 0 };
+  }
+
+  getReturnMeter(returnId: string): MeterReading {
+    return this.mixer?.getReturnMeter(returnId) ?? { peak: 0, rms: 0 };
+  }
+
+  getReturnInfos(): ReturnInfo[] {
+    return this.mixer?.getReturnInfos() ?? [];
+  }
+
+  /** RMS-only convenience kept for existing transport meters. */
   getTrackLevel(trackId: string): number {
-    const n = this.nodes.get(trackId);
-    if (!n) return 0;
-    n.analyser.getByteTimeDomainData(n.levelBuf as Uint8Array<ArrayBuffer>);
-    return rms(n.levelBuf);
+    return this.getChannelMeter(trackId).rms;
   }
 
   getMasterLevel(): number {
-    if (!this.ctx) return 0;
-    this.masterAnalyser.getByteTimeDomainData(this.masterBuf as Uint8Array<ArrayBuffer>);
-    return rms(this.masterBuf);
+    return this.getMasterMeter().rms;
   }
 
   /** Fill `out` with the master frequency spectrum (0..255 per bin). One memcpy, no alloc. */
   getSpectrum(out: Uint8Array): void {
-    if (!this.ctx) { out.fill(0); return; }
-    this.masterAnalyser.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
+    if (!this.mixer) { out.fill(0); return; }
+    this.mixer.getSpectrum(out);
   }
 
   /** Smoothed scheduling load (0..1), derived from the profiler window. */
@@ -395,45 +304,24 @@ class CadenceEngine {
     const seconds = p.lengthBars * 16 * stepDur + 2.4;
     const octx = new OfflineAudioContext(2, Math.ceil(seconds * sr), sr);
 
-    const bus = octx.createGain();
-    bus.gain.value = 0.9;
-    const comp = octx.createDynamicsCompressor();
-    comp.threshold.value = -10; comp.ratio.value = 3.5; comp.attack.value = 0.004; comp.release.value = 0.18;
-    bus.connect(comp);
-    comp.connect(octx.destination);
-    const reverb = octx.createConvolver();
-    reverb.buffer = makeImpulse(octx);
-    const revGain = octx.createGain();
-    revGain.gain.value = 0.9;
-    reverb.connect(revGain);
-    revGain.connect(bus);
+    // Reuse the exact live mixer topology (channels → returns → master) so the
+    // rendered file matches what the user hears. No analysers/meters offline.
+    const master = buildMaster(octx);
+    master.comp.connect(octx.destination);
+    const returns = RETURN_DEFS.map((d) => buildReturn(octx, d.id, d.name));
+    for (const r of returns) r.output.connect(master.busIn);
 
+    const anySolo = soloActive(p.tracks);
     const inputs = new Map<string, AudioNode>();
     for (const t of p.tracks) {
-      const input = octx.createGain();
-      const filter = octx.createBiquadFilter();
-      filter.type = "lowpass"; filter.frequency.value = t.fx.cutoff;
-      const shaper = octx.createWaveShaper();
-      shaper.curve = makeDriveCurve(t.fx.drive);
-      const pan = octx.createStereoPanner();
-      pan.pan.value = t.pan;
-      const out = octx.createGain();
-      out.gain.value = t.volume;
-      const delaySend = octx.createGain();
-      delaySend.gain.value = t.fx.delay * 0.55;
-      const delay = octx.createDelay(1.5);
-      delay.delayTime.value = 0.29;
-      const fb = octx.createGain();
-      fb.gain.value = 0.34;
-      const reverbSend = octx.createGain();
-      reverbSend.gain.value = t.fx.reverb * 0.7;
-
-      input.connect(filter); filter.connect(shaper); shaper.connect(pan);
-      pan.connect(out); out.connect(bus);
-      shaper.connect(delaySend); delaySend.connect(delay);
-      delay.connect(fb); fb.connect(delay); delay.connect(pan);
-      shaper.connect(reverbSend); reverbSend.connect(reverb);
-      inputs.set(t.id, input);
+      const ch = buildChannel(octx, master.busIn, returns, t.fx.drive);
+      ch.gate.gain.value = isAudible(t, anySolo) ? 1 : 0;
+      ch.filter.frequency.value = t.fx.cutoff;
+      ch.pan.pan.value = t.pan;
+      ch.fader.gain.value = t.volume;
+      ch.sends.get("reverb")?.gain.setValueAtTime(t.fx.reverb * 0.7, 0);
+      ch.sends.get("delay")?.gain.setValueAtTime(t.fx.delay * 0.55, 0);
+      inputs.set(t.id, ch.input);
     }
 
     const total = p.lengthBars * 16;
@@ -449,15 +337,6 @@ class CadenceEngine {
     const rendered = await octx.startRendering();
     return encodeWav(rendered);
   }
-}
-
-function rms(buf: Uint8Array): number {
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const v = (buf[i] - 128) / 128;
-    sum += v * v;
-  }
-  return Math.sqrt(sum / buf.length);
 }
 
 let singleton: CadenceEngine | null = null;

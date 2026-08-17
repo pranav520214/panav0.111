@@ -53,8 +53,12 @@ src/
 │   ├── seed.ts               # generated demo + starter projects
 │   └── index.ts              # barrel
 ├── state/store.tsx           # UI STATE LAYER — React binding that mirrors the bus
-├── audio/                    # AUDIO ENGINE LAYER — real-time scheduler, DSP, WAV render
-│   ├── engine.ts             #   (reached only via the core/audio seam)
+├── audio/                    # AUDIO ENGINE LAYER — real-time core (reached via the seam)
+│   ├── engine.ts             # transport + scheduling + export; delegates mix to mixer.ts
+│   ├── mixer.ts              # mixer engine: channel strips, returns, master, metering
+│   ├── scheduler.ts          # audio-clock lookahead transport clock
+│   ├── voicePool.ts          # bounded polyphony with oldest/quietest stealing
+│   ├── profiler.ts           # allocation-free per-callback CPU profiler
 │   └── synth.ts              # code-synthesized voices, drum synthesis, WAV encoder
 ├── ai/                       # AI LAYER — sandboxed worker → Command[] → the same bus
 │   ├── intent.ts             # deterministic MIDI-only intent parser
@@ -93,6 +97,31 @@ those calls over IPC to a native engine without touching a single component.
 Design rules: no heavy work on the audio path, no state mutation outside the bus,
 no UI → engine coupling outside the seam, graceful degradation when storage or
 workers are unavailable.
+
+### The mixer engine (`src/audio/mixer.ts`)
+
+A dedicated mix core owned by the engine; the UI reads/writes it only through the
+command bus + seam. Per-channel signal flow is fixed and ordered:
+
+```
+input → [gate] → INSERTS(filter→drive) → PAN → VOLUME(fader) → POST-FADER
+                                                                 ├─ SEND → Reverb return ─┐
+                                                                 ├─ SEND → Delay  return ─┤→ MASTER (sum → comp → analyser → out)
+                                                                 └──────────────────────────┤
+```
+
+- **Inserts** are an explicit per-channel chain (lowpass + waveshaper drive today,
+  driven by `set_track_fx` commands).
+- **Sends** tap *post-fader* and feed shared **return buses**; returns sum into the
+  **master bus** alongside every channel's post-fader output.
+- **Meters** sit on the post-fader tap, so each strip shows true **peak + RMS** that
+  already reflects volume and mute/solo.
+- **Solo is non-destructive**: soloing a track zeroes the input *gate* of every
+  non-soloed track — a track's `mute` flag is never written, so un-soloing restores
+  the exact prior state. The same `isAudible` rule drives the note scheduler, so
+  there is one definition of solo/mute semantics.
+- Live playback and offline WAV export share the *same* topology factories
+  (`buildChannel` / `buildReturn` / `buildMaster`), so a render matches what you hear.
 
 ## Project file format
 

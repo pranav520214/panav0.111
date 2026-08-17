@@ -10,6 +10,11 @@
 import { Project } from "../types";
 import { getEngine } from "../audio/engine";
 import type { ProfilerStats } from "../audio/profiler";
+import type { MeterReading, ReturnInfo } from "../audio/mixer";
+
+/* Static return-bus identities (not audio nodes) — safe for UI to read. */
+export { RETURN_DEFS } from "../audio/mixer";
+export type { MeterReading, ReturnInfo } from "../audio/mixer";
 
 export interface AudioVoice {
   stop(): void;
@@ -44,6 +49,12 @@ export interface AudioBackend {
 
   /* rendering */
   exportWav(p: Project): Promise<Blob>;
+
+  /* mixer — channel strips, return buses, master bus, metering */
+  getChannelMeter(trackId: string): MeterReading;
+  getMasterMeter(): MeterReading;
+  getReturnMeter(returnId: string): MeterReading;
+  getReturnInfos(): ReturnInfo[];
 
   /* metering / diagnostics */
   getTrackLevel(trackId: string): number;
@@ -114,6 +125,19 @@ class WebAudioBackend implements AudioBackend {
 
   exportWav(p: Project): Promise<Blob> {
     return this.e.exportWav(p);
+  }
+
+  getChannelMeter(trackId: string): MeterReading {
+    return this.e.getChannelMeter(trackId);
+  }
+  getMasterMeter(): MeterReading {
+    return this.e.getMasterMeter();
+  }
+  getReturnMeter(returnId: string): MeterReading {
+    return this.e.getReturnMeter(returnId);
+  }
+  getReturnInfos(): ReturnInfo[] {
+    return this.e.getReturnInfos();
   }
 
   getTrackLevel(trackId: string): number {

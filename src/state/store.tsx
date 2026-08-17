@@ -8,13 +8,15 @@
  * share one history. */
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Mode, Project } from "../types";
+import { MODE_ORDER, Mode, Project, WorkspaceView } from "../types";
 import { Command } from "../core/commands";
 import { bus, CommandValidationError } from "../core/bus";
 
 export interface StoreState {
   project: Project;
   mode: Mode;
+  workspaceView: WorkspaceView;
+  aiPanelOpen: boolean;
   selectedTrackId: string;
   editorClipId: string | null;
   mixerOpen: boolean;
@@ -25,11 +27,20 @@ export interface StoreState {
 }
 
 const MODE_KEY = "cadence.mode";
+const VIEW_KEY = "cadence.workspaceView";
+const AI_KEY = "cadence.aiPanelOpen";
 
 const readMode = (): Mode => {
   const m = localStorage.getItem(MODE_KEY);
   return m === "producer" || m === "advanced" ? m : "beginner";
 };
+
+const readView = (): WorkspaceView => {
+  const v = localStorage.getItem(VIEW_KEY);
+  return v === "pianoroll" || v === "mixer" ? v : "arrangement";
+};
+
+const readAiOpen = (): boolean => localStorage.getItem(AI_KEY) !== "0";
 
 /** Merge the bus's current truth into React state, keeping selection valid. */
 function syncFromBus(s: StoreState): StoreState {
@@ -58,6 +69,8 @@ function initState(): StoreState {
   return syncFromBus({
     project: p,
     mode: readMode(),
+    workspaceView: readView(),
+    aiPanelOpen: readAiOpen(),
     selectedTrackId: p.tracks[0]?.id ?? "",
     editorClipId: p.tracks[0]?.sourceClipId ?? null,
     mixerOpen: true,
@@ -70,6 +83,13 @@ function initState(): StoreState {
 
 export interface StoreApi {
   state: StoreState;
+  /**
+   * Progressive disclosure, expressed as "visible from this mode".
+   * gate("producer") is true in Producer AND Advanced; gate("advanced") only in
+   * Advanced. Components reveal controls with this instead of comparing mode
+   * strings, so the Beginner ⊂ Producer ⊂ Advanced ordering lives in one place.
+   */
+  gate: (threshold: Mode) => boolean;
   /** Dispatch commands through the bus; snapshot before → one undo reverts the batch. */
   apply: (label: string, commands: Command[]) => void;
   /** Same pipeline, no history entry (used while live-recording notes). */
@@ -79,6 +99,8 @@ export interface StoreApi {
   undo: () => void;
   redo: () => void;
   setMode: (mode: Mode) => void;
+  setWorkspaceView: (view: WorkspaceView) => void;
+  setAiPanel: (open: boolean) => void;
   selectTrack: (trackId: string) => void;
   setEditorClip: (clipId: string) => void;
   toggleMixer: () => void;
@@ -94,6 +116,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const api = useMemo<StoreApi>(() => ({
     state,
+    gate: (threshold) => MODE_ORDER[state.mode] >= MODE_ORDER[threshold],
     apply: (label, commands) => {
       try {
         bus.dispatch(label, commands);
@@ -118,6 +141,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setMode: (mode) => {
       localStorage.setItem(MODE_KEY, mode);
       setState((s) => ({ ...s, mode }));
+    },
+    setWorkspaceView: (workspaceView) => {
+      localStorage.setItem(VIEW_KEY, workspaceView);
+      setState((s) => ({ ...s, workspaceView }));
+    },
+    setAiPanel: (aiPanelOpen) => {
+      localStorage.setItem(AI_KEY, aiPanelOpen ? "1" : "0");
+      setState((s) => ({ ...s, aiPanelOpen }));
     },
     selectTrack: (trackId) =>
       setState((s) => {

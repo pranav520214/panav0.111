@@ -15,7 +15,7 @@ interface Props {
 }
 
 export default function Transport({ playing, recording, onTogglePlay, onStop, onToggleRecord, loop, onToggleLoop }: Props) {
-  const { state, apply } = useStore();
+  const { state, apply, gate } = useStore();
   const p = state.project;
   const [bpmDraft, setBpmDraft] = useState(p.bpm);
   const posRef = useRef<HTMLSpanElement>(null);
@@ -91,7 +91,8 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
   const setKey = (rootMidi: number, scale: ScaleType) =>
     apply("Change key", [{ op: "set_key", rootMidi, scale }]);
 
-  const advanced = state.mode === "advanced";
+  const advanced = gate("advanced");
+  const beginner = !gate("producer");
 
   return (
     <div className="panel px-3 py-2 flex items-center gap-4 shrink-0 anim-fade-up" style={{ animationDelay: "40ms" }}>
@@ -159,7 +160,7 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
       {/* key */}
       <div className="leading-none">
         <div className="panel-title mb-1">Key</div>
-        {state.mode === "beginner" ? (
+        {beginner ? (
           <div className="font-mono text-[14px] text-ink-200 pt-1.5">{NOTE_NAMES[p.rootMidi % 12]} {p.scale}</div>
         ) : (
           <div className="flex items-center gap-1.5 pt-1">

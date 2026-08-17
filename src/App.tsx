@@ -4,6 +4,7 @@ import { StoreProvider, StoreApi, useStore } from "./state/store";
 import { audio, serialize } from "./core";
 import TopBar from "./components/TopBar";
 import Transport from "./components/Transport";
+import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import Timeline from "./components/Timeline";
 import StepSequencer from "./components/StepSequencer";
 import PianoRoll from "./components/PianoRoll";
@@ -100,6 +101,11 @@ function Workbench() {
 
       const key = e.key.toLowerCase();
 
+      /* workspace view switching (1 / 2 / 3) */
+      if (key === "1") { s.setWorkspaceView("arrangement"); return; }
+      if (key === "2") { s.setWorkspaceView("pianoroll"); return; }
+      if (key === "3") { s.setWorkspaceView("mixer"); return; }
+
       /* drum pads */
       if (key in DRUM_KEYS) {
         const drumTrack = s.state.project.tracks.find((t) => t.instrument === "drumkit");
@@ -191,28 +197,33 @@ function Workbench() {
     <div className="h-screen flex flex-col overflow-hidden relative">
       <TopBar onToast={onToast} playing={playing} />
 
-      <div className="flex-1 min-h-0 flex gap-2 p-2">
+      {/* transport bar — persistent, spans the top of the work area */}
+      <div className="px-2 pt-2 shrink-0">
+        <Transport
+          playing={playing}
+          recording={recording}
+          onTogglePlay={togglePlay}
+          onStop={() => audio.stop()}
+          onToggleRecord={toggleRecord}
+          loop={loop}
+          onToggleLoop={() => { setLoop((l) => !l); audio.setLoop(!loop); }}
+        />
+      </div>
+
+      {/* persistent regions: browser (left) · workspace (center) · copilot (right) */}
+      <div className="flex-1 min-h-0 flex gap-2 px-2 py-2">
         <Browser onToast={onToast} />
 
         <main className="flex-1 min-w-0 flex flex-col gap-2">
-          <Transport
-            playing={playing}
-            recording={recording}
-            onTogglePlay={togglePlay}
-            onStop={() => audio.stop()}
-            onToggleRecord={toggleRecord}
-            loop={loop}
-            onToggleLoop={() => { setLoop((l) => !l); audio.setLoop(!loop); }}
-          />
-          <Timeline />
-          {isDrum ? <StepSequencer /> : <PianoRoll />}
+          <WorkspaceSwitcher />
+          <div className="flex-1 min-h-0 flex flex-col">
+            {state.workspaceView === "arrangement" && <Timeline />}
+            {state.workspaceView === "pianoroll" && (isDrum ? <StepSequencer /> : <PianoRoll />)}
+            {state.workspaceView === "mixer" && <Mixer />}
+          </div>
         </main>
 
         <AIPanel />
-      </div>
-
-      <div className="px-2 pb-1.5 shrink-0">
-        <Mixer />
       </div>
 
       {/* status bar */}

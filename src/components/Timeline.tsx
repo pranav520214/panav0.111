@@ -50,7 +50,7 @@ export default function Timeline() {
   const total = p.lengthBars;
 
   return (
-    <div className="panel flex flex-col h-[248px] shrink-0 anim-fade-up overflow-hidden" style={{ animationDelay: "80ms" }}>
+    <div className="panel flex flex-col flex-1 min-h-0 anim-fade-up overflow-hidden" style={{ animationDelay: "80ms" }}>
       {/* toolbar */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-ink-700/70">
         <span className="panel-title">Arrangement</span>

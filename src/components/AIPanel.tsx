@@ -3,7 +3,7 @@ import { DawCommand } from "../types";
 import { useStore } from "../state/store";
 import { AiResult, PlanItem, aiRespond } from "../ai/intent";
 import type { AiResponse } from "../ai/aiWorker";
-import { IconArrowRight, IconCheck, IconSend, IconSparkles, IconX } from "./icons";
+import { IconArrowRight, IconCheck, IconChevronRight, IconSend, IconSparkles, IconX } from "./icons";
 
 interface PlanPayload { title: string; summary: string; items: PlanItem[]; status: "pending" | "approved" | "rejected"; }
 interface Msg { id: number; role: "user" | "ai"; text?: string; plan?: PlanPayload; }
@@ -25,7 +25,7 @@ const CHIPS: Record<string, string[]> = {
 };
 
 export default function AIPanel() {
-  const { state, apply } = useStore();
+  const { state, apply, setAiPanel } = useStore();
   const [messages, setMessages] = useState<Msg[]>(() => [{ id: msgId++, role: "ai", text: WELCOME[state.mode] }]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -114,6 +114,28 @@ export default function AIPanel() {
     push({ role: "ai", text: "No problem — nothing was changed. Tell me what to adjust instead." });
   };
 
+  /* Collapsed state — a slim rail so the work area gets the full width. */
+  if (!state.aiPanelOpen) {
+    return (
+      <aside className="w-[46px] shrink-0 panel flex flex-col items-center pt-3 pb-4 anim-fade-up" style={{ animationDelay: "200ms" }}>
+        <button
+          onClick={() => setAiPanel(true)}
+          title="Open copilot"
+          aria-label="Open copilot"
+          className="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-glow/12 border border-amber-glow/30 text-amber-glow hover:bg-amber-glow/22 hover:scale-105 active:scale-95 transition-all duration-150 shadow-[0_0_16px_rgba(0,245,255,0.18)]"
+        >
+          <IconSparkles size={16} />
+        </button>
+        <span className="mt-3 text-[9px] font-semibold tracking-[0.22em] uppercase text-ink-400" style={{ writingMode: "vertical-rl" }}>
+          Copilot
+        </span>
+        <div className="mt-auto flex flex-col items-center gap-1.5" title={thinking ? "Copilot is thinking…" : "Copilot ready"}>
+          <span className={`w-1.5 h-1.5 rounded-full ${thinking ? "bg-amber-glow animate-pulse" : "bg-teal"} shadow-[0_0_8px_rgba(62,207,178,0.7)]`} />
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-[324px] shrink-0 panel flex flex-col anim-fade-up overflow-hidden" style={{ animationDelay: "200ms" }}>
       {/* header */}
@@ -123,6 +145,14 @@ export default function AIPanel() {
         <span className="text-[9px] font-mono text-ink-400 tracking-wider uppercase" title="Runs in an isolated Web Worker — no DOM, no network, no file access">midi copilot · sandboxed worker · undoable</span>
         <div className="flex-1" />
         <IconSparkles size={14} className="text-amber-glow" />
+        <button
+          onClick={() => setAiPanel(false)}
+          title="Collapse copilot panel"
+          aria-label="Collapse copilot panel"
+          className="w-6 h-6 rounded-md flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-ink-750 transition-colors duration-150"
+        >
+          <IconChevronRight size={14} />
+        </button>
       </div>
 
       {/* messages */}

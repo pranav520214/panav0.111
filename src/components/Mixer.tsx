@@ -2,13 +2,13 @@ import { useEffect, useRef } from "react";
 import { Track, TrackFx, dbLabel } from "../types";
 import { useStore } from "../state/store";
 import { audio } from "../core";
-import { IconChevronDown } from "./icons";
+import { IconMixer } from "./icons";
 
 const cutoffToSlider = (f: number) => Math.round((100 * Math.log(f / 300)) / Math.log(60));
 const sliderToCutoff = (v: number) => Math.round(300 * Math.pow(60, v / 100));
 
 export default function Mixer() {
-  const { state, apply, applySilent, snapshot, toggleMixer } = useStore();
+  const { state, apply, applySilent, snapshot, gate } = useStore();
   const p = state.project;
   const meterRefs = useRef(new Map<string, HTMLDivElement>());
   const masterRef = useRef<HTMLDivElement>(null);
@@ -40,8 +40,9 @@ export default function Mixer() {
     return () => cancelAnimationFrame(raf);
   }, [p.tracks]);
 
-  const mode = state.mode;
-  const fxOn = mode === "advanced";
+  const fxOn = gate("advanced");      // sends, filters, drive — Advanced only
+  const extended = gate("producer");  // pan, solo, mute labels — Producer & up
+  const beginner = !extended;
 
   const volGesture = (t: Track, value: number) => {
     snapshot(`${t.name} volume`);
@@ -49,19 +50,19 @@ export default function Mixer() {
   };
 
   return (
-    <section className={`panel shrink-0 flex flex-col transition-all duration-200 anim-fade-up ${state.mixerOpen ? (fxOn ? "h-[252px]" : "h-[198px]") : "h-[34px]"}`} style={{ animationDelay: "160ms" }}>
-      <button className="flex items-center gap-2 px-3 h-[33px] shrink-0 border-b border-ink-700/60 hover:bg-ink-800/60 transition-colors" onClick={toggleMixer} title={state.mixerOpen ? "Collapse mixer" : "Open mixer"}>
-        <IconChevronDown size={13} className={`text-ink-400 transition-transform duration-200 ${state.mixerOpen ? "" : "-rotate-90"}`} />
+    <section className="panel flex-1 min-h-0 flex flex-col anim-fade-up" style={{ animationDelay: "160ms" }}>
+      <div className="flex items-center gap-2 px-3 h-[38px] shrink-0 border-b border-ink-700/60">
+        <IconMixer size={14} className="text-amber-glow" />
         <span className="panel-title">Mixer</span>
         <span className="text-[10px] font-mono text-ink-400">{p.tracks.length} tracks + master</span>
-        {!fxOn && mode === "producer" && <span className="text-[9px] text-ink-400 hidden md:block">switch to Advanced for sends, filters & drive</span>}
-        {mode === "beginner" && <span className="text-[9px] text-ink-400 hidden md:block">volume & mute — that's all you need for now</span>}
-      </button>
+        <div className="flex-1" />
+        {extended && !fxOn && <span className="text-[9px] text-ink-400 hidden md:block">switch to Advanced for sends, filters & drive</span>}
+        {beginner && <span className="text-[9px] text-ink-400 hidden md:block">volume & mute — that's all you need for now</span>}
+      </div>
 
-      {state.mixerOpen && (
-        <div className="flex-1 min-h-0 flex gap-2 overflow-x-auto px-2.5 py-2">
+      <div className="flex-1 min-h-0 flex gap-2 overflow-x-auto px-2.5 py-2">
           {p.tracks.map((t) => (
-            <Strip key={t.id} t={t} fxOn={fxOn} mode={mode} meterEl={(el) => { if (el) meterRefs.current.set(t.id, el); else meterRefs.current.delete(t.id); }} volGesture={volGesture} apply={apply} applySilent={applySilent} snapshot={snapshot} />
+            <Strip key={t.id} t={t} fxOn={fxOn} extended={extended} meterEl={(el) => { if (el) meterRefs.current.set(t.id, el); else meterRefs.current.delete(t.id); }} volGesture={volGesture} apply={apply} applySilent={applySilent} snapshot={snapshot} />
           ))}
 
           {/* master */}
@@ -81,17 +82,16 @@ export default function Mixer() {
             <div className="px-2 pb-1.5 text-[9px] font-mono text-ink-400">0.0 dB</div>
           </div>
         </div>
-      )}
     </section>
   );
 }
 
 function Strip({
-  t, fxOn, mode, meterEl, volGesture, apply, applySilent, snapshot,
+  t, fxOn, extended, meterEl, volGesture, apply, applySilent, snapshot,
 }: {
   t: Track;
   fxOn: boolean;
-  mode: string;
+  extended: boolean;
   meterEl: (el: HTMLDivElement | null) => void;
   volGesture: (t: Track, v: number) => void;
   apply: (label: string, cmds: Parameters<ReturnType<typeof useStore>["apply"]>[1]) => void;
@@ -144,7 +144,7 @@ function Strip({
       </div>
 
       {/* pan */}
-      {mode !== "beginner" && (
+      {extended && (
         <div className="px-2 pb-1">
           <input
             type="range" min={-100} max={100} value={Math.round(t.pan * 100)}

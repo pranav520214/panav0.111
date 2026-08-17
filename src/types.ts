@@ -2,8 +2,21 @@
  * Everything the engine, the UI and the AI command system share. */
 
 export type Mode = "beginner" | "producer" | "advanced";
+
+/**
+ * Numeric rank so "at least this mode" is a single comparison. Complexity is
+ * additive and ordered: Beginner ⊂ Producer ⊂ Advanced. A control visible
+ * "from Producer" shows in Producer and Advanced alike — nothing is removed,
+ * only progressively disclosed. Components express intent via gate(threshold)
+ * instead of comparing mode strings, keeping the ordering in one place.
+ */
+export const MODE_ORDER: Record<Mode, number> = { beginner: 0, producer: 1, advanced: 2 };
+
 export type ScaleType = "minor" | "major";
 export type InstrumentKind = "drumkit" | "bass" | "keys" | "pluck" | "pad";
+
+/** Center workspace views — swappable, one active at a time. */
+export type WorkspaceView = "arrangement" | "pianoroll" | "mixer";
 
 export const STEPS_PER_BAR = 16;
 

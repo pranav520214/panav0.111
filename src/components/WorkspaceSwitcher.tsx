@@ -1,6 +1,6 @@
 import { WorkspaceView } from "../types";
 import { useStore } from "../state/store";
-import { IconArrangement, IconMixer, IconPiano, IconDrum, IconSynth } from "./icons";
+import { IconArrangement, IconMixer, IconPiano, IconDrum, IconSynth, IconZap } from "./icons";
 
 /**
  * Segmented control that swaps the center workspace between
@@ -19,6 +19,7 @@ export default function WorkspaceSwitcher() {
     { id: "mixer", label: "Mixer", icon: <IconMixer size={15} />, hint: "Levels, pan, sends & effects" },
     { id: "synth", label: "Synth Lab", icon: <IconSynth size={15} />, hint: "Subtractive synth — presets, patch editor & voice headroom" },
     { id: "groove", label: "Groove Box", icon: <IconDrum size={15} />, hint: "Step-sequencer drum machine — patterns, swing & song chain" },
+    { id: "fx", label: "FX Rack", icon: <IconZap size={15} />, hint: "Chainable effects — EQ, comp, reverb, delay & more, with live CPU cost" },
   ];
 
   const activeIndex = Math.max(0, tabs.findIndex((t) => t.id === state.workspaceView));

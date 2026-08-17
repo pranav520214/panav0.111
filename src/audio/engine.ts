@@ -267,6 +267,18 @@ class CadenceEngine {
     return this.mixer?.getReturnInfos() ?? [];
   }
 
+  /* ---------------- FX cost + insert rack (delegated to the mixer) ---------------- */
+
+  getChannelCpuCost(trackId: string): number {
+    return this.mixer?.getChannelCpuCost(trackId) ?? 0;
+  }
+  getBusCpuCost(): number {
+    return this.mixer?.getBusCpuCost() ?? 0;
+  }
+  getTotalCpuCost(): number {
+    return this.mixer?.getTotalCpuCost() ?? 0;
+  }
+
   /** RMS-only convenience kept for existing transport meters. */
   getTrackLevel(trackId: string): number {
     return this.getChannelMeter(trackId).rms;

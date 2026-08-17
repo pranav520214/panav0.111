@@ -15,13 +15,24 @@ export default function Mixer() {
   const rmsRefs = useRef(new Map<string, HTMLDivElement>());
   const peakRefs = useRef(new Map<string, HTMLDivElement>());
   const returnRefs = useRef(new Map<string, HTMLDivElement>());
+  const loadRefs = useRef(new Map<string, HTMLDivElement>());
   const masterRmsRef = useRef<HTMLDivElement>(null);
   const masterPeakRef = useRef<HTMLDivElement>(null);
+  const totalLoadRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const engine = audio;
     let raf = 0;
     const tick = () => {
+      // per-channel relative DSP load (normalized so the hottest strip reads 100%)
+      const costs = p.tracks.map((t) => engine.getChannelCpuCost(t.id));
+      const maxCost = Math.max(1, ...costs);
+      p.tracks.forEach((t, i) => {
+        const el = loadRefs.current.get(t.id);
+        if (el) el.style.width = `${Math.round((costs[i] / maxCost) * 100)}%`;
+      });
+      if (totalLoadRef.current) totalLoadRef.current.textContent = String(Math.round(engine.getTotalCpuCost()));
+
       // channel strips: RMS fill + peak cap (post-fader, reflects mute/solo)
       for (const t of p.tracks) {
         const m = engine.getChannelMeter(t.id);
@@ -60,6 +71,9 @@ export default function Mixer() {
         <IconMixer size={14} className="text-amber-glow" />
         <span className="panel-title">Mixer</span>
         <span className="text-[10px] font-mono text-ink-400">{p.tracks.length} tracks + master</span>
+        <span className="text-[9px] font-mono text-ink-500" title="Total relative DSP load of the mixer (channels + returns + master)">
+          DSP <span ref={totalLoadRef} className="text-teal tabular-nums">0</span>
+        </span>
         <div className="flex-1" />
         {extended && !fxOn && <span className="text-[9px] text-ink-400 hidden md:block">switch to Advanced for sends, filters & drive</span>}
         {beginner && <span className="text-[9px] text-ink-400 hidden md:block">volume & mute — that's all you need for now</span>}
@@ -74,6 +88,7 @@ export default function Mixer() {
               extended={extended}
               rmsEl={(el) => { if (el) rmsRefs.current.set(t.id, el); else rmsRefs.current.delete(t.id); }}
               peakEl={(el) => { if (el) peakRefs.current.set(t.id, el); else peakRefs.current.delete(t.id); }}
+              loadEl={(el) => { if (el) loadRefs.current.set(t.id, el); else loadRefs.current.delete(t.id); }}
               volGesture={volGesture}
               apply={apply}
               applySilent={applySilent}

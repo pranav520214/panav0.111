@@ -56,6 +56,11 @@ export interface AudioBackend {
   getReturnMeter(returnId: string): MeterReading;
   getReturnInfos(): ReturnInfo[];
 
+  /* FX — relative CPU load (shared node-cost model) */
+  getChannelCpuCost(trackId: string): number;
+  getBusCpuCost(): number;
+  getTotalCpuCost(): number;
+
   /* metering / diagnostics */
   getTrackLevel(trackId: string): number;
   getMasterLevel(): number;
@@ -138,6 +143,16 @@ class WebAudioBackend implements AudioBackend {
   }
   getReturnInfos(): ReturnInfo[] {
     return this.e.getReturnInfos();
+  }
+
+  getChannelCpuCost(trackId: string): number {
+    return this.e.getChannelCpuCost(trackId);
+  }
+  getBusCpuCost(): number {
+    return this.e.getBusCpuCost();
+  }
+  getTotalCpuCost(): number {
+    return this.e.getTotalCpuCost();
   }
 
   getTrackLevel(trackId: string): number {

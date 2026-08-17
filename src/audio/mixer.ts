@@ -23,6 +23,7 @@
 
 import { Project, Track } from "../types";
 import { makeDriveCurve, makeImpulse } from "./synth";
+import { estimateGraphCost } from "./fx";
 
 /* ---------------- solo logic (shared with the scheduler) ---------------- */
 
@@ -179,6 +180,24 @@ interface LiveChannel extends ChannelNodes {
   lastDrive: number;
 }
 
+/** Node kinds that make up a channel's fixed signal path (for cost reporting). */
+const CHANNEL_PATH_KINDS = [
+  "GainNode", // input
+  "GainNode", // gate
+  "BiquadFilterNode", // insert lowpass
+  "WaveShaperNode", // insert drive
+  "StereoPannerNode", // pan
+  "GainNode", // fader
+  "GainNode", // postFader
+  "GainNode", "GainNode", // sends
+  "AnalyserNode", // meter tap
+];
+const RETURN_KINDS: Record<string, string[]> = {
+  reverb: ["GainNode", "ConvolverNode", "GainNode", "AnalyserNode"],
+  delay: ["GainNode", "DelayNode", "GainNode", "GainNode", "AnalyserNode"],
+};
+const MASTER_KINDS = ["GainNode", "DynamicsCompressorNode", "AnalyserNode"];
+
 interface LiveReturn extends ReturnNodes {
   analyser: AnalyserNode;
   levelBuf: Uint8Array;
@@ -301,5 +320,39 @@ export class MixerEngine {
 
   getSpectrum(out: Uint8Array): void {
     this.masterAnalyser.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
+  }
+
+  /* ---------------- CPU cost (relative load per channel) ----------------
+   * Uses the shared FX node-cost model so these figures are comparable with the
+   * FX framework's per-effect costs. A channel's load is its fixed signal path
+   * plus a proportional share of each expensive shared return (the convolver
+   * reverb and the delay line), weighted by how hard the channel drives them.
+   * That's what makes load *vary* per channel: a drum kit leaning on the reverb
+   * shows hotter than a dry bass. */
+
+  /** Relative DSP load of one channel. */
+  getChannelCpuCost(trackId: string): number {
+    const ch = this.channels.get(trackId);
+    if (!ch) return 0;
+    let cost = estimateGraphCost(CHANNEL_PATH_KINDS);
+    const rev = ch.sends.get("reverb")?.gain.value ?? 0;
+    const dly = ch.sends.get("delay")?.gain.value ?? 0;
+    cost += rev * estimateGraphCost(RETURN_KINDS.reverb);
+    cost += dly * estimateGraphCost(RETURN_KINDS.delay);
+    return cost;
+  }
+
+  /** Relative load of shared infrastructure (returns + master). */
+  getBusCpuCost(): number {
+    let sum = estimateGraphCost(MASTER_KINDS);
+    for (const r of this.returns) sum += estimateGraphCost(RETURN_KINDS[r.id] ?? []);
+    return sum;
+  }
+
+  /** Total mixer load: every channel + returns + master. */
+  getTotalCpuCost(): number {
+    let sum = this.getBusCpuCost();
+    for (const [id] of this.channels) sum += this.getChannelCpuCost(id);
+    return sum;
   }
 }

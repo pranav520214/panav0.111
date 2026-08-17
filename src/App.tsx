@@ -11,6 +11,7 @@ import PianoRoll from "./components/PianoRoll";
 import Mixer from "./components/Mixer";
 import SynthLab from "./components/SynthLab";
 import GrooveBox from "./components/GrooveBox";
+import FxRack from "./components/FxRack";
 import AIPanel from "./components/AIPanel";
 import Browser from "./components/Browser";
 import RecoveryPrompt from "./components/RecoveryPrompt";
@@ -100,9 +101,10 @@ function Workbench() {
       if (key === "3") { s.setWorkspaceView("mixer"); return; }
       if (key === "4") { s.setWorkspaceView("synth"); return; }
       if (key === "5") { s.setWorkspaceView("groove"); return; }
+      if (key === "6") { s.setWorkspaceView("fx"); return; }
 
-      /* Synth Lab & Groove Box own the note/pad keys while open — don't double-trigger. */
-      if (s.state.workspaceView === "synth" || s.state.workspaceView === "groove") return;
+      /* Synth Lab, Groove Box & FX Rack own the note/pad keys while open — don't double-trigger. */
+      if (s.state.workspaceView === "synth" || s.state.workspaceView === "groove" || s.state.workspaceView === "fx") return;
 
       /* drum pads */
       if (key in DRUM_KEYS) {

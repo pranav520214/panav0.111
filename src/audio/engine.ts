@@ -315,6 +315,12 @@ class CadenceEngine {
     return rms(this.masterBuf);
   }
 
+  /** Fill `out` with the master frequency spectrum (0..255 per bin). Cheap: one memcpy from the analyser. */
+  getSpectrum(out: Uint8Array): void {
+    if (!this.ctx) { out.fill(0); return; }
+    this.masterAnalyser.getByteFrequencyData(out as Uint8Array<ArrayBuffer>);
+  }
+
   getLoad(): number { return Math.min(1, this.loadEma); }
 
   getLatencyMs(): number {

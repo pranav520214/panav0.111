@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DawCommand } from "../types";
 import { useStore } from "../state/store";
 import { AiResult, PlanItem, aiRespond } from "../ai/intent";
+import type { AiResponse } from "../ai/aiWorker";
 import { IconArrowRight, IconCheck, IconSend, IconSparkles, IconX } from "./icons";
 
 interface PlanPayload { title: string; summary: string; items: PlanItem[]; status: "pending" | "approved" | "rejected"; }
@@ -30,11 +31,23 @@ export default function AIPanel() {
   const [thinking, setThinking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<number | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const workerFailed = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, thinking]);
+
+  /* Spawn the AI sandbox once — a module worker with no DOM/network access. */
+  useEffect(() => {
+    try {
+      workerRef.current = new Worker(new URL("../ai/aiWorker.ts", import.meta.url), { type: "module" });
+    } catch {
+      workerFailed.current = true; // sandboxed spawn blocked → inline fallback
+    }
+    return () => { workerRef.current?.terminate(); workerRef.current = null; };
+  }, []);
 
   useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current); }, []);
 
@@ -57,10 +70,35 @@ export default function AIPanel() {
     push({ role: "user", text });
     setInput("");
     setThinking(true);
-    timerRef.current = window.setTimeout(() => {
-      handleResult(aiRespond(text, state.project));
-      setThinking(false);
-    }, 520 + Math.random() * 420);
+
+    const startedAt = performance.now();
+    const finish = (res: AiResult) => {
+      // keep a small, human "thinking" beat even though planning is instant
+      const wait = Math.max(0, 430 + Math.random() * 260 - (performance.now() - startedAt));
+      timerRef.current = window.setTimeout(() => { handleResult(res); setThinking(false); }, wait);
+    };
+
+    if (workerRef.current && !workerFailed.current) {
+      let settled = false;
+      const onMsg = (e: MessageEvent<AiResponse>) => {
+        if (settled) return;
+        settled = true;
+        workerRef.current?.removeEventListener("message", onMsg);
+        finish(e.data.result);
+      };
+      workerRef.current.addEventListener("message", onMsg);
+      workerRef.current.postMessage({ text, project: state.project });
+      // failsafe: if the sandbox ever goes silent, answer inline instead of hanging
+      window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        workerRef.current?.removeEventListener("message", onMsg);
+        workerFailed.current = true;
+        finish(aiRespond(text, state.project));
+      }, 1600);
+    } else {
+      finish(aiRespond(text, state.project));
+    }
   };
 
   const approve = (msg: Msg) => {
@@ -82,7 +120,7 @@ export default function AIPanel() {
       <div className="flex items-center gap-2 px-3 h-11 border-b border-ink-700/70 shrink-0">
         <span className={`w-2 h-2 rounded-full ${thinking ? "bg-amber-glow animate-pulse" : "bg-teal"} shadow-[0_0_8px_rgba(62,207,178,0.7)]`} />
         <span className="text-[13px] font-bold text-ink-100">Copilot</span>
-        <span className="text-[9px] font-mono text-ink-400 tracking-wider uppercase">midi copilot · undoable</span>
+        <span className="text-[9px] font-mono text-ink-400 tracking-wider uppercase" title="Runs in an isolated Web Worker — no DOM, no network, no file access">midi copilot · sandboxed worker · undoable</span>
         <div className="flex-1" />
         <IconSparkles size={14} className="text-amber-glow" />
       </div>

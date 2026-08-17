@@ -33,6 +33,7 @@ export const IconCheck = (p: P) => <S {...p}><path d="M20 6L9 17l-5-5" /></S>;
 export const IconTrash = (p: P) => <S {...p}><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></S>;
 export const IconBook = (p: P) => <S {...p}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></S>;
 export const IconArrowRight = (p: P) => <S {...p}><path d="M5 12h14M12 5l7 7-7 7" /></S>;
+export const IconFolderOpen = (p: P) => <S {...p}><path d="M6 14l1.5-5h13.2a1 1 0 0 1 .95 1.3L20 15" /><path d="M3 5a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v1" /><path d="M3 5v12a2 2 0 0 0 2 2h13l2.6-8.4A1 1 0 0 0 19.6 9H6.5a2 2 0 0 0-1.9 1.4L3 15" /></S>;
 
 export const BrandMark = ({ size = 26 }: P) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>

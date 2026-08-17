@@ -5,6 +5,7 @@ import React, { createContext, useContext, useMemo, useReducer } from "react";
 import { DawCommand, Mode, Project } from "../types";
 import { execCommands } from "../ai/commands";
 import { buildDemoProject } from "./seed";
+import { validateProject } from "./validate";
 
 interface HistoryEntry { label: string; project: Project; }
 
@@ -36,10 +37,10 @@ function loadInitialProject(): Project {
   try {
     const raw = localStorage.getItem("cadence.project.v1");
     if (raw) {
-      const p = JSON.parse(raw) as Project;
-      if (p && Array.isArray(p.tracks) && p.tracks.length > 0 && p.clips && typeof p.bpm === "number") {
-        return p;
-      }
+      // never trust stored JSON — full schema validation before it touches anything
+      const res = validateProject(JSON.parse(raw));
+      if (res.ok) return res.project;
+      console.warn(`Cadence: stored project failed validation (${res.error}); loading demo song.`);
     }
   } catch { /* corrupted save — fall back to the demo song */ }
   return buildDemoProject();
@@ -47,11 +48,12 @@ function loadInitialProject(): Project {
 
 function initState(): StoreState {
   const project = loadInitialProject();
+  const rawMode = localStorage.getItem("cadence.mode");
   return {
     project,
     past: [],
     future: [],
-    mode: (localStorage.getItem("cadence.mode") as Mode) || "beginner",
+    mode: rawMode === "producer" || rawMode === "advanced" ? rawMode : "beginner",
     selectedTrackId: project.tracks[0].id,
     editorClipId: project.tracks[0].sourceClipId,
     mixerOpen: true,

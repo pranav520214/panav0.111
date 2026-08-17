@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Mode } from "../types";
 import { useStore } from "../state/store";
 import { buildEmptyProject } from "../state/seed";
+import { parseProjectFile } from "../state/validate";
 import { getEngine } from "../audio/engine";
-import { BrandMark, IconDownload, IconPlus, IconRedo, IconSave, IconUndo } from "./icons";
+import { BrandMark, IconDownload, IconFolderOpen, IconPlus, IconRedo, IconSave, IconUndo } from "./icons";
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "beginner", label: "Beginner", hint: "The essentials only — just make music" },
@@ -44,6 +45,31 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
     } finally {
       setExporting(false);
     }
+  };
+
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const saveFile = () => {
+    const payload = JSON.stringify({ app: "cadence", format: 1, ...state.project }, null, 1);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${state.project.name.replace(/[^\w\- ]+/g, "").trim() || "session"}.cadence.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    onToast("Project file saved — it can be re-opened here");
+  };
+
+  const openFile = async (file: File) => {
+    const text = await file.text();
+    const res = parseProjectFile(text);
+    if (!res.ok) {
+      onToast(`Can't open that file — ${res.error.toLowerCase()}`);
+      return;
+    }
+    loadProject(res.project);
+    onToast(`Opened "${res.project.name}" — validated ${res.project.tracks.length} tracks`);
   };
 
   const lastUndo = state.past[state.past.length - 1]?.label;
@@ -112,9 +138,26 @@ export default function TopBar({ onToast, playing }: { onToast: (msg: string) =>
 
       <div className="w-px h-7 bg-ink-700 mx-1" />
 
-      <button className="btn" onClick={() => { localStorage.setItem("cadence.project.v1", JSON.stringify(state.project)); onToast("Project saved in this browser"); }} title="Save project to this browser">
+      <button className="btn" onClick={() => { localStorage.setItem("cadence.project.v1", JSON.stringify(state.project)); onToast("Project saved in this browser"); }} title="Autosaves anyway — this pins it now">
         <IconSave size={14} /> Save
       </button>
+      <button className="btn" onClick={() => fileRef.current?.click()} title="Open a .cadence.json project file (schema-validated)">
+        <IconFolderOpen size={14} /> Open
+      </button>
+      <button className="btn" onClick={saveFile} title="Download the project as a .cadence.json file">
+        <IconDownload size={14} /> Save file
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,.cadence,application/json"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) openFile(f).catch(() => onToast("Couldn't read that file"));
+          e.target.value = "";
+        }}
+      />
       <button className="btn btn-primary" onClick={exportWav} disabled={exporting} title="Render the whole song to a WAV file">
         <IconDownload size={14} /> {exporting ? "Rendering…" : "Export WAV"}
       </button>

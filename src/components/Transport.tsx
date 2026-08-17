@@ -22,6 +22,40 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
   const meterRef = useRef<HTMLDivElement>(null);
   const cpuRef = useRef<HTMLSpanElement>(null);
   const latRef = useRef<HTMLSpanElement>(null);
+  const specRef = useRef<HTMLCanvasElement>(null);
+
+  /* master spectrum — read-only tap off the analyser, drawn on its own rAF */
+  useEffect(() => {
+    const cv = specRef.current;
+    const g = cv?.getContext("2d");
+    if (!cv || !g) return;
+    const buf = new Uint8Array(1024);
+    const BARS = 26;
+    const smooth = new Float32Array(BARS);
+    let raf = 0;
+    const draw = () => {
+      getEngine().getSpectrum(buf);
+      g.clearRect(0, 0, cv.width, cv.height);
+      const bw = cv.width / BARS;
+      for (let i = 0; i < BARS; i++) {
+        const lo = Math.floor(Math.pow(i / BARS, 1.8) * 500);
+        const hi = Math.max(lo + 1, Math.floor(Math.pow((i + 1) / BARS, 1.8) * 500));
+        let v = 0;
+        for (let j = lo; j < hi; j++) v = Math.max(v, buf[j]);
+        const target = v / 255;
+        smooth[i] += (target - smooth[i]) * (target > smooth[i] ? 0.5 : 0.16);
+        const h = Math.max(2, smooth[i] * (cv.height - 4));
+        const x = i * bw + 1;
+        g.fillStyle = `rgba(0,245,255,${0.22 + smooth[i] * 0.6})`;
+        g.fillRect(x, cv.height - h, bw - 2, h);
+        g.fillStyle = `rgba(0,245,255,${0.5 + smooth[i] * 0.5})`;
+        g.fillRect(x, cv.height - h - 3, bw - 2, 2);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   useEffect(() => setBpmDraft(p.bpm), [p.bpm]);
 
@@ -151,6 +185,12 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
       </div>
 
       <div className="flex-1" />
+
+      {/* master spectrum */}
+      <div className="hidden lg:block leading-none" title="Master output spectrum">
+        <div className="panel-title mb-1">Spectrum</div>
+        <canvas ref={specRef} width={300} height={68} className="w-[150px] h-[34px] rounded-sm bg-ink-950/70 border border-ink-750" />
+      </div>
 
       {/* diagnostics */}
       <div className="hidden md:flex items-center gap-4 text-[10px] font-mono text-ink-400">

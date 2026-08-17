@@ -11,10 +11,11 @@ no account, no cloud, no GPU required.
 
 1. **Beginner-first UX** — three progressive modes (Beginner → Producer → Advanced)
    hide complexity until it's useful. Nothing is removed, only disclosed.
-2. **AI-native, not AI-bolted-on** — the copilot never touches state directly. It parses
-   intent into **validated DAW commands** (`set_track_volume`, `create_clip`, …), shows the
-   plan, and only the shared command executor mutates the project. Every AI batch is a
-   single atomic undo entry.
+2. **AI-native, not AI-bolted-on** — the copilot is a scoped *music-content* copilot:
+   it runs in its own sandboxed worker and emits **validated MIDI commands**
+   (`create_clip`, `set_tempo`, `transpose_clip`, …) — never mixer moves, never files,
+   never network. It shows the plan, and only the shared command executor mutates the
+   project. Every AI batch is a single atomic undo entry.
 3. **Low-hardware by design** — all sound is code-synthesized (zero sample downloads),
    the scheduler only queues native WebAudio nodes, and the AI is deterministic
    generation (seeded music-theory algorithms), so idle CPU/GPU cost is ~0.
@@ -57,11 +58,59 @@ AI copilot ──▶ Intent parser ──▶ DawCommand[] ──▶ validated ex
 | `src/audio/engine.ts` | Real-time scheduler, track graphs, meters, offline WAV render |
 | `src/ai/commands.ts` | The **only** mutation gateway (pure executors + factories) |
 | `src/ai/intent.ts` | Deterministic MIDI-only intent parser → validated command plans |
+| `src/ai/aiWorker.ts` | AI process sandbox — the parser runs in a DOM-less Web Worker |
+| `src/state/validate.ts` | Schema validation/sanitization for every project that is loaded |
 | `src/state/store.tsx` | Reducer, shared undo/redo, UX modes, selection |
 | `src/components/*` | Transport, Timeline, Step Sequencer, Piano Roll, Mixer, Copilot |
 
 Design rules: no heavy work on the audio path, no direct state mutation outside the
 executor, no blocking of the UI thread, graceful degradation when storage is unavailable.
+
+## Security
+
+Security is a design constraint, not a final pass:
+
+- **Renderer sandbox** — a strict `Content-Security-Policy` ships in `index.html`:
+  no inline scripts, no `eval`, `object-src 'none'`, `connect-src 'none'`
+  (app code makes **zero** network calls), `form-action 'none'`. The only declared
+  external asset is Google Fonts; the desktop shell drops even that (see Shipping).
+- **AI process sandbox** — the copilot executes in a dedicated **module Web Worker**
+  (`src/ai/aiWorker.ts`). Module workers have no `document`, no `window`, no network
+  or filesystem APIs; the parser's only imports are pure functions over the project
+  model. It returns `DawCommand[]` — it cannot mutate anything by construction.
+  A 1.6 s failsafe falls back to the same pure function inline if workers are
+  unavailable; behavior is identical either way.
+- **Every file is validated** — autosave restore *and* file import pass through
+  `validateProject()`, which rebuilds a sanitized project from scratch: enum
+  allow-lists (instruments, scales), ID/color format checks, range clamps
+  (BPM 55–200, pitch, velocity, bars), size caps (tracks, clips, notes), and an
+  8 MB input cap. A tampered or version-skewed save can never reach the engine raw.
+- **Command layer** — user gestures and AI alike flow through one executor with
+  schema-shaped operations and an atomic undo stack; there is no other write path.
+- **No undisclosed network calls** — `connect-src 'none'` is enforced by the
+  browser, not by convention; there is no telemetry, no updater phone-home,
+  no analytics. Projects live in origin-scoped `localStorage` or in files you save.
+
+## Shipping (one-click install)
+
+The web build is installable today: the PWA manifest lets Chrome/Edge offer
+*"Install Cadence"* with zero setup. For the native ship target — signed,
+one-click `.exe` / `.dmg` / `.deb` / `AppImage` installers that behave like
+Chrome's — the plan is a [Tauri](https://tauri.app) shell around this same web
+codebase:
+
+- **Why Tauri**: ~5 MB installer and ~30 MB RAM vs Electron's ~150 MB+; it uses
+  the OS webview, needs **no GPU**, and its build pipeline signs and notarizes
+  per platform (Authenticode on Windows, notarization on macOS).
+- **Hardening carried over**: the shell disables the webview's devtools in
+  release, sets the same CSP via Tauri config (with `unsafe-inline` removed
+  entirely), disables external navigation, and bundles fonts so the desktop app
+  is 100% offline.
+- **Update flow**: Tauri's updater with signature verification, pointed at our
+  release endpoint — signed manifests only, no unsigned downloads.
+
+Commands for maintainers: `npm run tauri dev`, `npm run tauri build` (produces
+all four installer formats per OS from one codebase).
 
 ## Roadmap
 

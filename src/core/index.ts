@@ -10,3 +10,4 @@ export * from "./seed";
 export * from "./validate";
 export * from "./format";
 export * from "./autosave";
+export * from "./midi";

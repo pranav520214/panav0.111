@@ -10,6 +10,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { MODE_ORDER, Mode, Project, WorkspaceView } from "../types";
 import { Command } from "../core/commands";
+import { RecordMode } from "../core/midi";
 import { bus, CommandValidationError } from "../core/bus";
 import {
   AutosaveService, AutosaveStatus, RecoveryCandidate,
@@ -26,6 +27,8 @@ export interface StoreState {
   selectedTrackId: string;
   editorClipId: string | null;
   mixerOpen: boolean;
+  /** MIDI recording mode: append to the clip, or replace the recorded region. */
+  recordMode: RecordMode;
   canUndo: boolean;
   canRedo: boolean;
   undoLabel: string | null;
@@ -61,6 +64,10 @@ const readView = (): WorkspaceView => {
 
 const readAiOpen = (): boolean => localStorage.getItem(AI_KEY) !== "0";
 
+const RECORD_KEY = "cadence.recordMode";
+const readRecordMode = (): RecordMode =>
+  localStorage.getItem(RECORD_KEY) === "replace" ? "replace" : "overdub";
+
 /** Merge the bus's current truth into React state, keeping selection valid. */
 function syncFromBus(s: StoreState): StoreState {
   const p = bus.getState();
@@ -93,6 +100,7 @@ function initState(): StoreState {
     selectedTrackId: p.tracks[0]?.id ?? "",
     editorClipId: p.tracks[0]?.sourceClipId ?? null,
     mixerOpen: true,
+    recordMode: readRecordMode(),
     canUndo: bus.canUndo,
     canRedo: bus.canRedo,
     undoLabel: bus.undoLabel(),
@@ -125,6 +133,8 @@ export interface StoreApi {
   selectTrack: (trackId: string) => void;
   setEditorClip: (clipId: string) => void;
   toggleMixer: () => void;
+  /** Choose MIDI recording behaviour: overdub (append) or replace (clear region). */
+  setRecordMode: (mode: RecordMode) => void;
   loadProject: (project: Project) => void;
   /** Explicit known-good Save (atomic). Returns false if storage failed. */
   saveNow: () => boolean;
@@ -186,6 +196,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setMode: (mode) => {
       localStorage.setItem(MODE_KEY, mode);
       setState((s) => ({ ...s, mode }));
+    },
+    setRecordMode: (recordMode) => {
+      localStorage.setItem(RECORD_KEY, recordMode);
+      setState((s) => ({ ...s, recordMode }));
     },
     setWorkspaceView: (workspaceView) => {
       localStorage.setItem(VIEW_KEY, workspaceView);

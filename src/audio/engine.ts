@@ -45,7 +45,9 @@ export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note)
       if (!clip) continue;
       const rel = s - pl.bar * 16;
       if (rel < 0 || rel >= clip.lengthBars * 16) continue;
-      for (const n of clip.notes) if (n.start === rel) emit(t, n);
+      // Match any note whose (possibly fractional, post-quantize) start lands in
+      // this step; the caller places it at its exact sub-step clock time.
+      for (const n of clip.notes) if (Math.floor(n.start) === rel) emit(t, n);
     }
   }
 }
@@ -204,11 +206,16 @@ class CadenceEngine {
     const sd = this.clock?.getStepDur() ?? this.stepDur();
     // Per-step note walk. `emit` is one closure per musical step (not per audio
     // buffer); everything inside it routes primitives into the pre-bound pool.
+    // `time` is the audio-clock instant of this integer step; a note's fractional
+    // start (from quantize/swing) offsets it *within* the step, so every note-on is
+    // scheduled at its exact sample-accurate clock time — never snapped to the grid.
     stepNotes(p, abs, (t, n) => {
       const input = this.mixer?.getInput(t.id) ?? null;
       if (!input) return;
+      const frac = n.start - Math.floor(n.start);
+      const when = time + frac * sd;
       const dur = t.instrument === "drumkit" ? 0.4 : Math.max(0.06, n.dur * sd);
-      pool.trigger(input, time, dur, n.vel, t.instrument as InstrumentKind, n.pitch);
+      pool.trigger(input, when, dur, n.vel, t.instrument as InstrumentKind, n.pitch);
     });
   }
 

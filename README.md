@@ -126,6 +126,31 @@ input → [gate] → INSERTS(filter→drive) → PAN → VOLUME(fader) → POST-
 - Live playback and offline WAV export share the *same* topology factories
   (`buildChannel` / `buildReturn` / `buildMaster`), so a render matches what you hear.
 
+### The MIDI engine (`src/core/midi.ts`)
+
+A pure, backend-agnostic MIDI core in the application layer (runs in tests and the
+future native backend unchanged):
+
+- **Data model** — the canonical note is `MidiNote { id, pitch, velocity, start,
+  duration }` (1/16-step positions); `toMidi`/`fromMidi` map losslessly to the app's
+  `Note` wire format. A clip is a note container plus extent, with `normalizeNotes`
+  (sort/clamp/drop-invalid) and `dedupeNotes` keeping any imported or recorded data
+  well-formed.
+- **Sample-accurate playback** — event times are derived from a `StepClock.timeOf(step)`
+  interface, satisfied by the audio-clock-driven `TransportClock` (the same clock as the
+  transport — never a separate JS timer). `clipEvents` expands a clip into time-sorted
+  note-on/off events and `pumpClipEvents` walks them over the scheduling horizon. The
+  engine schedules each note at its exact *fractional* sub-step clock time, so
+  quantize/swing offsets play back precisely.
+- **Quantization on record and on edit** — `quantizeNotes(notes, { grid, strength, swing,
+  duration })` powers the Piano Roll's edit quantizer (1/4–1/32 grids, partial strength,
+  swing; applied as one undoable command). Live recording runs captured note-onsets through
+  the same `snapToGrid` primitive, snapping each take to the nearest 1/16 as it lands.
+- **Recording modes** — `applyRecordedNotes(existing, incoming, mode, totalSteps, range?)`
+  implements **overdub** (append + dedupe) and **replace** (clear the region first), both
+  normalized. The Transport carries an Overdub/Replace toggle; Replace clears the target
+  clip once per take (a single undo entry), Overdub never clears.
+
 ### The subtractive synth (`src/audio/subsynth.ts` → Synth Lab view)
 
 A lightweight subtractive voice: **two oscillators** (sine / triangle / saw / square /

@@ -141,13 +141,14 @@ export default function Mixer() {
 }
 
 function Strip({
-  t, fxOn, extended, rmsEl, peakEl, volGesture, apply, applySilent, snapshot,
+  t, fxOn, extended, rmsEl, peakEl, loadEl, volGesture, apply, applySilent, snapshot,
 }: {
   t: Track;
   fxOn: boolean;
   extended: boolean;
   rmsEl: (el: HTMLDivElement | null) => void;
   peakEl: (el: HTMLDivElement | null) => void;
+  loadEl: (el: HTMLDivElement | null) => void;
   volGesture: (t: Track, v: number) => void;
   apply: (label: string, cmds: Parameters<ReturnType<typeof useStore>["apply"]>[1]) => void;
   applySilent: (cmds: Parameters<ReturnType<typeof useStore>["applySilent"]>[0]) => void;
@@ -175,6 +176,13 @@ function Strip({
       <div className="h-[3px]" style={{ background: t.color }} />
       <div className="px-2 pt-1.5 flex items-center gap-1.5">
         <span className="text-[11px] font-bold text-ink-100 truncate flex-1" title={t.name}>{t.name}</span>
+      </div>
+
+      {/* relative DSP load — hotter strips (more sends/FX) fill further */}
+      <div className="px-2 pt-1" title="Relative DSP load of this channel">
+        <div className="h-[3px] rounded-full bg-ink-950/80 overflow-hidden">
+          <div ref={loadEl} className="h-full rounded-full transition-[width] duration-150 ease-out" style={{ width: "0%", background: `linear-gradient(90deg, ${t.color}66, ${t.color})` }} />
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 flex items-stretch gap-2 px-2.5 py-1.5">

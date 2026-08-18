@@ -3,8 +3,8 @@ import { Note, STEPS_PER_BAR, midiName, uid } from "../types";
 import { SCALES, genMelody, mulberry32 } from "../theory";
 import { useStore } from "../state/store";
 import { useEditorClip } from "../state/useEditorClip";
-import { audio } from "../core";
-import { IconEraser, IconSparkles } from "./icons";
+import { audio, QUANTIZE_GRIDS, quantizeAppNotes } from "../core";
+import { IconEraser, IconSparkles, IconZap } from "./icons";
 
 const LABEL_W = 64;
 const CELL_W = 22;
@@ -19,6 +19,10 @@ export default function PianoRoll() {
   const [noteLen, setNoteLen] = useState(2);
   const [snap, setSnap] = useState(true);
   const gridRef = useRef<HTMLDivElement>(null);
+  /* quantize (edit) — grid in 1/16 steps, strength %, swing % */
+  const [qGrid, setQGrid] = useState(1);
+  const [qStrength, setQStrength] = useState(100);
+  const [qSwing, setQSwing] = useState(0);
 
   if (!ec || ec.track.instrument === "drumkit") return null;
   const { track, clip } = ec;
@@ -38,6 +42,13 @@ export default function PianoRoll() {
 
   const setNotes = (notes: Note[], label: string, extra?: { lengthBars?: number; name?: string }) =>
     apply(label, [{ op: "set_clip_content", clipId: clip.id, notes, ...extra }]);
+
+  const doQuantize = () => {
+    if (clip.notes.length === 0) return;
+    const gridLabel = QUANTIZE_GRIDS.find((g) => g.steps === qGrid)?.label ?? `${qGrid}`;
+    const q = quantizeAppNotes(clip.notes, { grid: qGrid, strength: qStrength / 100, swing: qSwing / 100 });
+    setNotes(q, `Quantize to ${gridLabel} @ ${qStrength}%${qSwing ? ` · swing ${qSwing}%` : ""}`);
+  };
 
   const clickRow = (e: React.MouseEvent, pitch: number) => {
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -102,6 +113,41 @@ export default function PianoRoll() {
         >
           Scale snap {snap ? "on" : "off"}
         </button>
+
+        {/* quantize (edit) — grid / strength / swing, applied as one undoable step */}
+        <div
+          className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-800/70 px-2.5 py-1.5"
+          title="Quantize note positions — grid sets resolution, strength blends toward the grid, swing pushes off-beats"
+        >
+          <span className="text-[9px] font-bold uppercase tracking-widest text-ink-400">Quantize</span>
+          <div className="flex items-center gap-1">
+            {QUANTIZE_GRIDS.map((g) => (
+              <button
+                key={g.label}
+                onClick={() => setQGrid(g.steps)}
+                className={`px-1.5 py-0.5 rounded font-mono text-[10px] border transition-colors ${qGrid === g.steps ? "border-amber-glow/60 text-amber-glow bg-amber-glow/10" : "border-ink-700 text-ink-400 hover:text-ink-100"}`}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-1 text-[9px] font-mono text-ink-400" title={`Strength ${qStrength}%`}>
+            Str
+            <input type="range" min={0} max={100} value={qStrength} onChange={(e) => setQStrength(Number(e.target.value))} className="w-14 h-3" />
+          </label>
+          <label className="flex items-center gap-1 text-[9px] font-mono text-ink-400" title={`Swing ${qSwing}%`}>
+            Swg
+            <input type="range" min={0} max={100} value={qSwing} onChange={(e) => setQSwing(Number(e.target.value))} className="w-12 h-3" />
+          </label>
+          <button
+            onClick={doQuantize}
+            disabled={clip.notes.length === 0}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide bg-amber-glow/15 border border-amber-glow/50 text-amber-glow hover:bg-amber-glow/25 disabled:opacity-30 disabled:pointer-events-none transition-all duration-150 active:scale-95"
+          >
+            <IconZap size={11} /> Apply
+          </button>
+        </div>
+
         <div className="flex-1" />
         <span className="text-[10px] text-ink-400 hidden xl:block">click = draw · click note = erase · shift+click = accent · keys A–K row plays live</span>
         <button className="btn py-1! px-2! text-[11px]!" onClick={suggest} title="Let the copilot sketch a melody in key">

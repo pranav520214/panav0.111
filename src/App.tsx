@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Note, uid } from "./types";
 import { StoreProvider, StoreApi, useStore } from "./state/store";
-import { audio } from "./core";
+import { audio, snapToGrid } from "./core";
 import TopBar from "./components/TopBar";
 import Transport from "./components/Transport";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
@@ -43,6 +43,11 @@ function Workbench() {
   const heldNotes = useRef(new Map<string, { noteId: string; clipId: string; startStep: number; voice: { stop: () => void } }>());
   const recRef = useRef(false);
   recRef.current = recording;
+  /* MIDI recording mode (overdub vs replace) — mirrored for the key handler. */
+  const recModeRef = useRef(state.recordMode);
+  recModeRef.current = state.recordMode;
+  /* Replace mode clears the target clip once per take, on the first recorded note. */
+  const takeClearedRef = useRef(false);
 
   const onToast = (msg: string) => {
     const id = toastId++;
@@ -131,8 +136,16 @@ function Workbench() {
             : melodic.sourceClipId;
           const clip = proj.clips[clipId];
           if (clip) {
+            /* Replace mode: wipe the target clip once per take, before the first
+             * note lands. Undoable as a single entry; overdub never clears. */
+            if (recModeRef.current === "replace" && !takeClearedRef.current) {
+              s.apply("Replace take: clear clip", [{ op: "set_clip_content", clipId, notes: [] }]);
+              takeClearedRef.current = true;
+            }
             const clipSteps = clip.lengthBars * 16;
-            const startStep = Math.floor(engine.getCurrentStep()) % clipSteps;
+            /* Record quantization: snap the captured (fractional) playhead to the
+             * nearest 1/16, using the same MIDI quantize primitive as editing. */
+            const startStep = ((Math.round(snapToGrid(engine.getCurrentStep(), 1)) % clipSteps) + clipSteps) % clipSteps;
             const noteId = uid("n");
             const note: Note = { id: noteId, pitch: midi, start: startStep, dur: 1, vel: 0.85 };
             s.applySilent([{ op: "add_notes", clipId, notes: [note] }]);
@@ -181,9 +194,14 @@ function Workbench() {
     const engine = audio;
     if (!recording) {
       storeRef.current.snapshot("Take: recorded notes");
+      takeClearedRef.current = false; // fresh take — replace mode may clear again
       setRecording(true);
       if (!engine.playing) engine.play();
-      onToast("Recording — play the A–K keys; notes land in the open clip");
+      onToast(
+        recModeRef.current === "replace"
+          ? "Recording (replace) — the open clip is cleared on your first note"
+          : "Recording (overdub) — play the A–K keys; notes layer onto the open clip",
+      );
     } else {
       setRecording(false);
       onToast("Recording stopped");

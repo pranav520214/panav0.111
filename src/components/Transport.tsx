@@ -15,7 +15,7 @@ interface Props {
 }
 
 export default function Transport({ playing, recording, onTogglePlay, onStop, onToggleRecord, loop, onToggleLoop }: Props) {
-  const { state, apply, gate } = useStore();
+  const { state, apply, gate, setRecordMode } = useStore();
   const p = state.project;
   const [bpmDraft, setBpmDraft] = useState(p.bpm);
   const posRef = useRef<HTMLSpanElement>(null);
@@ -121,6 +121,35 @@ export default function Transport({ playing, recording, onTogglePlay, onStop, on
         >
           <IconRecord size={15} />
         </button>
+
+        {/* MIDI recording mode — overdub layers notes, replace clears the region */}
+        <div
+          className="flex items-center rounded-lg border border-ink-700 bg-ink-800 p-0.5 select-none"
+          title="MIDI recording mode"
+          role="group"
+          aria-label="Recording mode"
+        >
+          {(["overdub", "replace"] as const).map((m) => {
+            const on = state.recordMode === m;
+            return (
+              <button
+                key={m}
+                onClick={() => setRecordMode(m)}
+                title={m === "overdub" ? "Overdub — new notes layer onto the clip" : "Replace — the recorded region is cleared first"}
+                className={`px-2 py-1 rounded-md text-[10px] font-bold tracking-wide uppercase transition-all duration-150 ${
+                  on
+                    ? m === "replace"
+                      ? "bg-rec/25 text-rec shadow-[0_0_10px_rgba(255,111,97,0.25)]"
+                      : "bg-teal/20 text-teal shadow-[0_0_10px_rgba(62,207,178,0.25)]"
+                    : "text-ink-400 hover:text-ink-200"
+                }`}
+              >
+                {m}
+              </button>
+            );
+          })}
+        </div>
+
         <button
           onClick={onToggleLoop}
           title={loop ? "Looping on — click to play once" : "Looping off"}

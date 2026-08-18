@@ -46,7 +46,24 @@ export interface Clip {
 export interface Placement {
   id: string;
   clipId: string;
+  /** Bar position on the timeline (may be fractional after a free drag). */
   bar: number;
+  /** Trim: first step of the clip that is audible (0 = from the top). */
+  offsetSteps?: number;
+  /** Trim: audible length in bars (defaults to the clip's full length). */
+  lengthBars?: number;
+  /** Fade-in length in 1/16 steps (0 = no fade). */
+  fadeIn?: number;
+  /** Fade-out length in 1/16 steps (0 = no fade). */
+  fadeOut?: number;
+}
+
+export interface Marker {
+  id: string;
+  label: string;
+  /** Bar position (fractional allowed). */
+  bar: number;
+  color?: string;
 }
 
 export interface TrackFx {
@@ -74,6 +91,8 @@ export interface Track {
   /** clip used when painting empty timeline cells */
   sourceClipId: string;
   placements: Placement[];
+  /** Optional grouping tag — tracks sharing a group are tinted/labeled together. */
+  groupId?: string | null;
 }
 
 export interface TimeSignature {
@@ -95,6 +114,12 @@ export interface AutomationLane {
   points: AutomationEvent[];
 }
 
+/** Timeline loop region in bars, or null for "loop the whole song". */
+export interface LoopRegion {
+  startBar: number;
+  endBar: number;
+}
+
 export interface Project {
   name: string;
   bpm: number;
@@ -105,6 +130,10 @@ export interface Project {
   automation: AutomationLane[];
   tracks: Track[];
   clips: Record<string, Clip>;
+  /** Arrangement markers (Intro / Verse / …) pinned to bars. */
+  markers: Marker[];
+  /** Optional loop region; null = loop the entire timeline. */
+  loopRegion: LoopRegion | null;
   /** Epoch ms — surfaced as ISO strings in the file format's metadata block. */
   createdAt: number;
   modifiedAt: number;

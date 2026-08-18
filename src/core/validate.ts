@@ -7,8 +7,8 @@
  * so a tampered or version-skewed save can never crash the engine or the UI. */
 
 import {
-  AutomationLane, AutomationParam, Clip, InstrumentKind, Note, Placement,
-  Project, ScaleType, TimeSignature, Track, uid,
+  AutomationLane, AutomationParam, Clip, InstrumentKind, LoopRegion, Marker, Note,
+  Placement, Project, ScaleType, TimeSignature, Track, uid,
 } from "../types";
 
 const AUTOMATION_PARAMS = new Set<string>(["volume", "pan", "reverb", "delay", "cutoff", "drive"]);
@@ -117,7 +117,22 @@ export function validateProject(raw: unknown): ValidationResult {
           const pl = rp as Record<string, unknown>;
           const clipId = typeof pl.clipId === "string" && clips[pl.clipId] ? pl.clipId : "";
           if (!clipId) continue;
-          placements.push({ id: id(pl.id, "pl"), clipId, bar: int(pl.bar, 0, lengthBars - 1, 0) });
+          // bars may be fractional (beat-level splits); snap to the nearest 1/16
+          const bar = Math.round(num(pl.bar, 0, lengthBars, 0) * 16) / 16;
+          const clipLen = clips[clipId].lengthBars;
+          const offsetSteps = Math.round(num(pl.offsetSteps, 0, clipLen * 16, 0));
+          const plOut: Placement = { id: id(pl.id, "pl"), clipId, bar };
+          if (offsetSteps > 0) plOut.offsetSteps = offsetSteps;
+          if (pl.lengthBars !== undefined) {
+            // audible length: at least 1 step, never past the clip's tail
+            const maxLen = clipLen - offsetSteps / 16;
+            plOut.lengthBars = Math.min(maxLen, Math.max(1 / 16, num(pl.lengthBars, 0, 64, maxLen)));
+          }
+          const fi = Math.round(num(pl.fadeIn, 0, 256, 0));
+          const fo = Math.round(num(pl.fadeOut, 0, 256, 0));
+          if (fi > 0) plOut.fadeIn = fi;
+          if (fo > 0) plOut.fadeOut = fo;
+          placements.push(plOut);
         }
       }
 
@@ -141,6 +156,7 @@ export function validateProject(raw: unknown): ValidationResult {
         clipIds,
         sourceClipId,
         placements,
+        groupId: typeof t.groupId === "string" && t.groupId.length <= 16 ? t.groupId : null,
       });
 
       // note ranges must match the instrument even if the clip pre-dated a track swap
@@ -187,6 +203,30 @@ export function validateProject(raw: unknown): ValidationResult {
     }
   }
 
+  /* markers — capped, ids/labels sanitized, bars clamped to the timeline */
+  const markers: Marker[] = [];
+  if (Array.isArray(p.markers)) {
+    for (const rm of p.markers.slice(0, 64)) {
+      if (typeof rm !== "object" || rm === null) continue;
+      const m = rm as Record<string, unknown>;
+      markers.push({
+        id: id(m.id, "mk"),
+        bar: Math.round(num(m.bar, 0, lengthBars, 0) * 16) / 16,
+        label: str(m.label, 24, "Marker") || "Marker",
+      });
+    }
+    markers.sort((a, b) => a.bar - b.bar);
+  }
+
+  /* loop region — null unless it's a sane, ordered pair inside the timeline */
+  let loopRegion: LoopRegion | null = null;
+  if (typeof p.loopRegion === "object" && p.loopRegion !== null) {
+    const lr = p.loopRegion as Record<string, unknown>;
+    const startBar = num(lr.startBar, 0, lengthBars, 0);
+    const endBar = num(lr.endBar, 0, lengthBars, 0);
+    if (endBar - startBar >= 0.25) loopRegion = { startBar, endBar };
+  }
+
   const now = Date.now();
 
   return {
@@ -201,6 +241,8 @@ export function validateProject(raw: unknown): ValidationResult {
       automation,
       tracks,
       clips,
+      markers,
+      loopRegion,
       createdAt: typeof p.createdAt === "number" && Number.isFinite(p.createdAt) && p.createdAt >= 0 ? p.createdAt : now,
       modifiedAt: typeof p.modifiedAt === "number" && Number.isFinite(p.modifiedAt) && p.modifiedAt >= 0 ? p.modifiedAt : now,
     },

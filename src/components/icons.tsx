@@ -48,6 +48,8 @@ export const IconActivity = (p: P) => <S {...p}><path d="M3 20h2v-6H3zM9 20h2V8H
 export const IconReverse = (p: P) => <S {...p} fill="currentColor"><path d="M11 5v14L3 12z" stroke="none" /><path d="M21 5v14l-8-7z" stroke="none" /></S>;
 /** Slice / scissors. */
 export const IconScissors = (p: P) => <S {...p}><circle cx="6" cy="6" r="2.6" /><circle cx="6" cy="18" r="2.6" /><path d="M8.2 7.6L20 19M8.2 16.4L20 5" /></S>;
+export const IconCopy = (p: P) => <S {...p}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></S>;
+export const IconFlag = (p: P) => <S {...p}><path d="M5 21V4" /><path d="M5 4c4-2.5 8 2.5 14 0v9c-6 2.5-10-2.5-14 0" /></S>;
 /** Upload arrow into a tray. */
 export const IconUpload = (p: P) => <S {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 8l5-5 5 5" /><path d="M12 3v12" /></S>;
 

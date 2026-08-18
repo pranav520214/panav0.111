@@ -76,6 +76,10 @@ export interface ProjectFileV1 {
   routing: FileRouting;
   samples: unknown[];
   presets: unknown[];
+  /** Arrangement markers pinned to bars. */
+  markers: { id: string; bar: number; label: string }[];
+  /** Loop region in bars, or null = loop the whole timeline. */
+  loopRegion: { startBar: number; endBar: number } | null;
 }
 
 /* ---------------- serialize ---------------- */
@@ -122,6 +126,7 @@ export function toV1Doc(p: Project): ProjectFileV1 {
       clipIds: [...t.clipIds],
       sourceClipId: t.sourceClipId,
       placements: t.placements.map((pl) => ({ ...pl })),
+      groupId: t.groupId ?? null,
     })),
     clips: Object.values(p.clips).map((c) => ({
       id: c.id,
@@ -138,6 +143,8 @@ export function toV1Doc(p: Project): ProjectFileV1 {
     },
     samples: [],
     presets: [],
+    markers: p.markers.map((m) => ({ ...m })),
+    loopRegion: p.loopRegion ? { ...p.loopRegion } : null,
   };
 }
 
@@ -305,6 +312,8 @@ function fromV1Doc(raw: Record<string, unknown>): FileResult {
         return [typeof cl.id === "string" ? cl.id : "", c];
       }),
     ),
+    markers: Array.isArray(raw.markers) ? raw.markers : [],
+    loopRegion: isObj(raw.loopRegion) ? raw.loopRegion : null,
     createdAt: parseTs(meta.created) ?? now,
     modifiedAt: parseTs(meta.modified) ?? now,
   };

@@ -22,24 +22,29 @@ export function buildDemoProject(): Project {
   const drums = makeTrack("drumkit", "Pulse Kit", "#ff6f61");
   wire(drums, { id: uid("clip"), name: "Beat A", lengthBars: 1, notes: genDrums(rng, 1, 1) }, [0, 1, 2, 3, 4, 5, 6, 7], clips);
   drums.volume = 0.95;
+  drums.groupId = "A"; // rhythm section
 
   const bass = makeTrack("bass", "Subline", "#ffb45e");
   wire(bass, { id: uid("clip"), name: "Bass A", lengthBars: 2, notes: genBass(rng, rootMidi, "minor", 2, 1, PROG) }, [0, 2, 4, 6], clips);
+  bass.groupId = "A";
 
   const keys = makeTrack("keys", "Glass Keys", "#3ecfb2");
   const chordNotes = genChords(rng, rootMidi, "minor", 4, 1, PROG);
   wire(keys, { id: uid("clip"), name: "Chords A", lengthBars: 4, notes: chordNotes }, [0, 4], clips);
   keys.volume = 0.7;
   keys.pan = -0.15;
+  keys.groupId = "B"; // harmony section
 
   const lead = makeTrack("pluck", "Neon Pluck", "#58b7f5");
   wire(lead, { id: uid("clip"), name: "Hook", lengthBars: 2, notes: genMelody(rng, rootMidi, "minor", 2, 1) }, [2, 4, 6], clips);
   lead.pan = 0.18;
+  lead.groupId = "B";
 
   const pad = makeTrack("pad", "Air Pad", "#a78bfa");
   wire(pad, { id: uid("clip"), name: "Wash", lengthBars: 4, notes: padFromChords(chordNotes, rootMidi) }, [0, 4], clips);
   pad.volume = 0.6;
   pad.pan = 0.1;
+  pad.groupId = "B";
 
   const now = Date.now();
   return {
@@ -50,6 +55,13 @@ export function buildDemoProject(): Project {
     lengthBars: 8,
     timeSignature: { numerator: 4, denominator: 4 },
     automation: [],
+    markers: [
+      { id: uid("mk"), bar: 0, label: "Intro" },
+      { id: uid("mk"), bar: 2, label: "Verse" },
+      { id: uid("mk"), bar: 4, label: "Chorus" },
+      { id: uid("mk"), bar: 6, label: "Outro" },
+    ],
+    loopRegion: null,
     tracks: [drums, bass, keys, lead, pad],
     clips,
     createdAt: now,
@@ -81,6 +93,8 @@ export function buildEmptyProject(): Project {
     lengthBars: 8,
     timeSignature: { numerator: 4, denominator: 4 },
     automation: [],
+    markers: [],
+    loopRegion: null,
     tracks,
     clips,
     createdAt: now,

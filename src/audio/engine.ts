@@ -16,7 +16,7 @@
  *  - The UI never touches an AudioNode: it calls play/pause/stop/loop/record-arm
  *    and reads transport/metering through these methods only (via core/audio.ts). */
 
-import { InstrumentKind, Note, Project, Track } from "../types";
+import { InstrumentKind, Note, Placement, Project, Track } from "../types";
 import { AudioProfiler, ProfilerStats } from "./profiler";
 import { TransportClock } from "./scheduler";
 import { VoicePool } from "./voicePool";
@@ -32,8 +32,17 @@ export const DEFAULT_MAX_POLYPHONY = 32;
  * Walk every note that sounds on `absStep` and hand it to `emit`.
  * Shared verbatim by live playback and offline rendering — one code path.
  * The loop itself allocates nothing; `emit` is the only callback.
+ *
+ * Placement trim model: `offsetSteps` skips the head of the clip (the block's
+ * bar position is where content step `offsetSteps` begins) and `lengthBars`
+ * caps the audible tail. `rel` is the step index *within the audible window*
+ * (0 at the block's left edge) — the engine uses it for fade envelopes.
  */
-export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note) => void): void {
+export function stepNotes(
+  p: Project,
+  absStep: number,
+  emit: (t: Track, n: Note, rel: number, pl: Placement) => void,
+): void {
   const total = p.lengthBars * 16;
   const s = ((absStep % total) + total) % total;
   // Solo/mute semantics live in the mixer (single source of truth).
@@ -43,13 +52,28 @@ export function stepNotes(p: Project, absStep: number, emit: (t: Track, n: Note)
     for (const pl of t.placements) {
       const clip = p.clips[pl.clipId];
       if (!clip) continue;
-      const rel = s - pl.bar * 16;
-      if (rel < 0 || rel >= clip.lengthBars * 16) continue;
+      const off = pl.offsetSteps ?? 0;
+      const clipSteps = clip.lengthBars * 16;
+      const vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : clipSteps - off;
+      // fractional bars (beat-level splits) → fractional step position
+      const relF = s - pl.bar * 16;
+      if (relF < 0 || relF >= vis) continue;
+      const rel = Math.floor(relF);
       // Match any note whose (possibly fractional, post-quantize) start lands in
       // this step; the caller places it at its exact sub-step clock time.
-      for (const n of clip.notes) if (Math.floor(n.start) === rel) emit(t, n);
+      for (const n of clip.notes) {
+        if (Math.floor(n.start) - off === rel && n.start < off + vis) emit(t, n, rel, pl);
+      }
     }
   }
+}
+
+/** Fade envelope value (0..1) for a note onset at `rel` inside the audible window. */
+export function placementFade(pl: Placement, rel: number, visSteps: number): number {
+  let f = 1;
+  if (pl.fadeIn && pl.fadeIn > 0) f *= Math.min(1, rel / pl.fadeIn);
+  if (pl.fadeOut && pl.fadeOut > 0) f *= Math.min(1, (visSteps - rel) / pl.fadeOut);
+  return f < 0 ? 0 : f > 1 ? 1 : f;
 }
 
 class CadenceEngine {
@@ -99,7 +123,10 @@ class CadenceEngine {
       );
       this.clock.loop = this.loop;
 
-      if (this.project) this.mixer.setProject(this.project);
+      if (this.project) {
+        this.mixer.setProject(this.project);
+        this.applyLoopRegion(this.project);
+      }
     }
     return this.ctx;
   }
@@ -111,6 +138,17 @@ class CadenceEngine {
     this.mixer?.setProject(p);
     // Re-anchor the grid on tempo change so playback stays glitch-free.
     if (this.clock && prev && prev.bpm !== p.bpm) this.clock.setStepDur(this.stepDur());
+    // Keep the scheduler's loop region in sync with the arrangement.
+    this.applyLoopRegion(p);
+  }
+
+  /** Push project.loopRegion (bars) into the scheduler (steps). */
+  private applyLoopRegion(p: Project): void {
+    if (!this.clock) return;
+    this.clock.setLoopRegion(
+      (p.loopRegion?.startBar ?? 0) * 16,
+      p.loopRegion ? p.loopRegion.endBar * 16 : null,
+    );
   }
 
   /* ---------------- transport (the only surface the UI drives) ---------------- */
@@ -209,13 +247,20 @@ class CadenceEngine {
     // `time` is the audio-clock instant of this integer step; a note's fractional
     // start (from quantize/swing) offsets it *within* the step, so every note-on is
     // scheduled at its exact sample-accurate clock time — never snapped to the grid.
-    stepNotes(p, abs, (t, n) => {
+    // `rel` indexes the note inside the placement's audible window — the fade
+    // envelope scales note velocity so clip fades shape every onset inside them.
+    stepNotes(p, abs, (t, n, rel, pl) => {
       const input = this.mixer?.getInput(t.id) ?? null;
       if (!input) return;
       const frac = n.start - Math.floor(n.start);
       const when = time + frac * sd;
+      const clip = p.clips[pl.clipId];
+      const off = pl.offsetSteps ?? 0;
+      const vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : (clip ? clip.lengthBars * 16 - off : 16);
+      const f = pl.fadeIn || pl.fadeOut ? placementFade(pl, rel, vis) : 1;
+      if (f <= 0.004) return; // fully faded out — skip the voice entirely
       const dur = t.instrument === "drumkit" ? 0.4 : Math.max(0.06, n.dur * sd);
-      pool.trigger(input, when, dur, n.vel, t.instrument as InstrumentKind, n.pitch);
+      pool.trigger(input, when, dur, n.vel * f, t.instrument as InstrumentKind, n.pitch);
     });
   }
 
@@ -346,11 +391,17 @@ class CadenceEngine {
     const total = p.lengthBars * 16;
     for (let s = 0; s < total; s++) {
       const time = 0.05 + s * stepDur;
-      stepNotes(p, s, (t, n) => {
+      stepNotes(p, s, (t, n, rel, pl) => {
         const dest = inputs.get(t.id);
         if (!dest) return;
-        if (t.instrument === "drumkit") playDrum(octx, dest, n.pitch, time, n.vel);
-        else playNote(octx, dest, t.instrument, n.pitch, time, Math.max(0.06, n.dur * stepDur), n.vel);
+        const clip = p.clips[pl.clipId];
+        const off = pl.offsetSteps ?? 0;
+        const vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : (clip ? clip.lengthBars * 16 - off : 16);
+        const f = pl.fadeIn || pl.fadeOut ? placementFade(pl, rel, vis) : 1;
+        if (f <= 0.004) return;
+        const vel = n.vel * f;
+        if (t.instrument === "drumkit") playDrum(octx, dest, n.pitch, time, vel);
+        else playNote(octx, dest, t.instrument, n.pitch, time, Math.max(0.06, n.dur * stepDur), vel);
       });
     }
     const rendered = await octx.startRendering();

@@ -5,7 +5,7 @@
 import {
   Clip, Note, Placement, Project, STEPS_PER_BAR, Track, uid,
 } from "../types";
-import { Command } from "./commands";
+import { Command, PlacementPatch } from "./commands";
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -166,9 +166,116 @@ export function execCommand(p: Project, c: Command): Project {
         }),
       };
 
+    /* ---------------- arrangement ---------------- */
+
+    case "update_placement":
+      return updatePlacementIn(p, c.trackId, c.placementId, c.patch);
+
+    case "split_placement": {
+      const track = p.tracks.find((t) => t.id === c.trackId);
+      const pl = track?.placements.find((x) => x.id === c.placementId);
+      const clip = pl ? p.clips[pl.clipId] : undefined;
+      if (!track || !pl || !clip) return p;
+      const clipSteps = clip.lengthBars * 16;
+      const off = pl.offsetSteps ?? 0;
+      const vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : clipSteps - off;
+      const k = c.atStep;
+      // the split point must fall strictly inside the visible window
+      if (k <= off || k >= off + vis) return p;
+      const leftVis = k - off;
+      const rightVis = vis - leftVis;
+      const halfL = Math.max(1, Math.floor(leftVis / 2));
+      const halfR = Math.max(1, Math.floor(rightVis / 2));
+      const left: Placement = {
+        id: pl.id, clipId: pl.clipId, bar: pl.bar,
+        ...(off > 0 ? { offsetSteps: off } : {}),
+        lengthBars: leftVis / 16,
+        ...(pl.fadeIn ? { fadeIn: Math.min(pl.fadeIn, halfL) } : {}),
+        ...(pl.fadeOut ? { fadeOut: Math.min(pl.fadeOut, halfL) } : {}),
+      };
+      const right: Placement = {
+        id: uid("pl"), clipId: pl.clipId, bar: pl.bar + leftVis / 16,
+        offsetSteps: k,
+        lengthBars: rightVis / 16,
+        ...(pl.fadeIn ? { fadeIn: Math.min(pl.fadeIn, halfR) } : {}),
+        ...(pl.fadeOut ? { fadeOut: Math.min(pl.fadeOut, halfR) } : {}),
+      };
+      return updateTrack(p, c.trackId, (t) => ({
+        ...t,
+        placements: t.placements.flatMap((x) => (x.id === pl.id ? [left, right] : [x])),
+      }));
+    }
+
+    case "duplicate_placement": {
+      const track = p.tracks.find((t) => t.id === c.trackId);
+      const pl = track?.placements.find((x) => x.id === c.placementId);
+      if (!track || !pl) return p;
+      const copy: Placement = { ...pl, id: uid("pl"), bar: Math.max(0, pl.bar + c.deltaBars) };
+      return updateTrack(p, c.trackId, (t) => ({ ...t, placements: [...t.placements, copy] }));
+    }
+
+    case "set_markers":
+      return { ...p, markers: [...c.markers].sort((a, b) => a.bar - b.bar) };
+
+    case "set_loop_region":
+      return { ...p, loopRegion: c.region };
+
+    case "set_track_group":
+      return updateTrack(p, c.trackId, (t) => ({ ...t, groupId: c.groupId }));
+
+    case "set_track_color":
+      return updateTrack(p, c.trackId, (t) => ({ ...t, color: c.color }));
+
     default:
       return p;
   }
+}
+
+/** Merge a patch into one placement, keeping the audible window coherent:
+ *  offset ≥ 0, visible length ≥ 1 step, window never past the clip's tail,
+ *  fades capped at half the visible length. A left-trim (offset shift) moves the
+ *  bar position with it so the block's right edge stays put. */
+function updatePlacementIn(p: Project, trackId: string, placementId: string, patch: PlacementPatch): Project {
+  const track = p.tracks.find((t) => t.id === trackId);
+  const pl = track?.placements.find((x) => x.id === placementId);
+  const clip = pl ? p.clips[pl.clipId] : undefined;
+  if (!track || !pl || !clip) return p;
+  const clipSteps = clip.lengthBars * 16;
+
+  let bar = pl.bar;
+  let off = pl.offsetSteps ?? 0;
+  let vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : clipSteps - off;
+  let fi = pl.fadeIn ?? 0;
+  let fo = pl.fadeOut ?? 0;
+
+  if (patch.bar !== undefined) bar = clamp(patch.bar, 0, 4096);
+  if (patch.offsetSteps !== undefined) {
+    const newOff = clamp(Math.round(patch.offsetSteps), 0, clipSteps - 1);
+    const d = newOff - off;
+    bar = Math.max(0, bar + d / 16);
+    off = newOff;
+    vis = clamp(vis - d, 1, clipSteps - off);
+  }
+  if (patch.lengthBars !== undefined) vis = clamp(Math.round(patch.lengthBars * 16), 1, clipSteps - off);
+  if (patch.fadeIn !== undefined) fi = clamp(Math.round(patch.fadeIn), 0, 256);
+  if (patch.fadeOut !== undefined) fo = clamp(Math.round(patch.fadeOut), 0, 256);
+  const half = Math.max(1, Math.floor(vis / 2));
+  fi = Math.min(fi, half);
+  fo = Math.min(fo, half);
+
+  const next: Placement = {
+    id: pl.id,
+    clipId: pl.clipId,
+    bar,
+    ...(off > 0 ? { offsetSteps: off } : {}),
+    ...(off > 0 || vis < clipSteps ? { lengthBars: vis / 16 } : {}),
+    ...(fi > 0 ? { fadeIn: fi } : {}),
+    ...(fo > 0 ? { fadeOut: fo } : {}),
+  };
+  return updateTrack(p, trackId, (t) => ({
+    ...t,
+    placements: t.placements.map((x) => (x.id === placementId ? next : x)),
+  }));
 }
 
 export function execCommands(p: Project, commands: Command[]): Project {

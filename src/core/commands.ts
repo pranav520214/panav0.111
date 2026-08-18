@@ -7,7 +7,7 @@
  *  - User gestures, the AI copilot and file imports all speak this same
  *    vocabulary — there is exactly one mutation path. */
 
-import { Clip, Note, ScaleType, Track, TrackFx } from "../types";
+import { Clip, LoopRegion, Marker, Note, ScaleType, Track, TrackFx } from "../types";
 
 export type Command =
   | { op: "set_project_name"; name: string }
@@ -29,7 +29,25 @@ export type Command =
   | { op: "transpose_clip"; clipId: string; semitones: number }
   | { op: "place_clip"; trackId: string; clipId: string; bar: number }
   | { op: "remove_placement"; trackId: string; placementId: string }
-  | { op: "clear_placements"; trackId?: string; range?: [number, number] };
+  | { op: "clear_placements"; trackId?: string; range?: [number, number] }
+  /* arrangement: placement trim/fade, split, duplicate, markers, loop region, grouping */
+  | { op: "update_placement"; trackId: string; placementId: string; patch: PlacementPatch }
+  | { op: "split_placement"; trackId: string; placementId: string; atStep: number }
+  | { op: "duplicate_placement"; trackId: string; placementId: string; deltaBars: number }
+  | { op: "set_markers"; markers: Marker[] }
+  | { op: "set_loop_region"; region: LoopRegion | null }
+  | { op: "set_track_group"; trackId: string; groupId: string | null }
+  | { op: "set_track_color"; trackId: string; color: string };
+
+/** Partial placement edit — every field optional, all values clamped by the executor. */
+export interface PlacementPatch {
+  bar?: number;
+  offsetSteps?: number;
+  /** Audible length in bars (undefined = leave untouched). */
+  lengthBars?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+}
 
 export type CommandCategory = "structure" | "mix" | "midi";
 
@@ -55,6 +73,13 @@ export const COMMAND_META: Record<Command["op"], { name: string; category: Comma
   place_clip: { name: "Place clip on timeline", category: "midi" },
   remove_placement: { name: "Remove clip block", category: "midi" },
   clear_placements: { name: "Clear timeline blocks", category: "midi" },
+  update_placement: { name: "Edit clip block", category: "midi" },
+  split_placement: { name: "Split clip block", category: "midi" },
+  duplicate_placement: { name: "Duplicate clip block", category: "midi" },
+  set_markers: { name: "Edit markers", category: "structure" },
+  set_loop_region: { name: "Set loop region", category: "structure" },
+  set_track_group: { name: "Set track group", category: "structure" },
+  set_track_color: { name: "Set track color", category: "structure" },
 };
 
 /* ---------------- schema validation ----------------
@@ -198,6 +223,55 @@ export function validateCommand(c: Command): string | null {
       }
       return null;
     }
+    case "update_placement": {
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      if (!isStr(c.placementId, 128)) return "placementId must be a non-empty string";
+      if (typeof c.patch !== "object" || c.patch === null) return "patch must be an object";
+      const pt = c.patch as Record<string, unknown>;
+      if (pt.bar !== undefined && (!isNum(pt.bar) || !inRange(pt.bar, 0, 4096))) return "patch.bar must be a number 0–4096";
+      if (pt.offsetSteps !== undefined && (!isNum(pt.offsetSteps) || !isInt(pt.offsetSteps) || !inRange(pt.offsetSteps, 0, 4096))) return "patch.offsetSteps must be an integer 0–4096";
+      if (pt.lengthBars !== undefined && (!isNum(pt.lengthBars) || !inRange(pt.lengthBars, 1 / 16, 64))) return "patch.lengthBars must be a number ≥ 1/16";
+      if (pt.fadeIn !== undefined && (!isNum(pt.fadeIn) || !isInt(pt.fadeIn) || !inRange(pt.fadeIn, 0, 256))) return "patch.fadeIn must be an integer 0–256";
+      if (pt.fadeOut !== undefined && (!isNum(pt.fadeOut) || !isInt(pt.fadeOut) || !inRange(pt.fadeOut, 0, 256))) return "patch.fadeOut must be an integer 0–256";
+      return null;
+    }
+    case "split_placement":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      if (!isStr(c.placementId, 128)) return "placementId must be a non-empty string";
+      return isNum(c.atStep) && isInt(c.atStep) && inRange(c.atStep, 1, 4095)
+        ? null
+        : "atStep must be an integer 1–4095";
+    case "duplicate_placement":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      if (!isStr(c.placementId, 128)) return "placementId must be a non-empty string";
+      return isNum(c.deltaBars) && inRange(c.deltaBars, -4096, 4096) ? null : "deltaBars must be a number";
+    case "set_markers": {
+      if (!Array.isArray(c.markers)) return "markers must be an array";
+      if (c.markers.length > 64) return "too many markers (max 64)";
+      for (const m of c.markers) {
+        if (typeof m !== "object" || m === null) return "marker must be an object";
+        const mk = m as unknown as Record<string, unknown>;
+        if (!isStr(mk.id, 128)) return "marker.id must be a non-empty string";
+        if (!isNum(mk.bar) || !inRange(mk.bar, 0, 4096)) return "marker.bar must be a number 0–4096";
+        if (!isStr(mk.label, 24)) return "marker.label must be a non-empty string (≤ 24 chars)";
+      }
+      return null;
+    }
+    case "set_loop_region": {
+      if (c.region === null) return null;
+      if (typeof c.region !== "object") return "region must be an object or null";
+      const r = c.region as unknown as Record<string, unknown>;
+      if (!isNum(r.startBar) || !inRange(r.startBar, 0, 4096)) return "region.startBar must be a number 0–4096";
+      if (!isNum(r.endBar) || !inRange(r.endBar, 0, 4096)) return "region.endBar must be a number 0–4096";
+      return r.endBar > r.startBar ? null : "region.endBar must be greater than startBar";
+    }
+    case "set_track_group":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      if (c.groupId === null) return null;
+      return isStr(c.groupId, 16) ? null : "groupId must be a non-empty string (≤ 16 chars) or null";
+    case "set_track_color":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      return isStr(c.color, 16) && /^#[0-9a-fA-F]{6}$/.test(c.color) ? null : "color must be a #rrggbb hex string";
     default:
       return "unknown command op";
   }

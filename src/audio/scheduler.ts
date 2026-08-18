@@ -24,6 +24,16 @@ export interface SchedulerCallbacks {
 export class TransportClock {
   loop = true;
 
+  /** Loop region in steps; [0, Infinity) = "loop the whole timeline". */
+  private loopStart = 0;
+  private loopEnd = Number.POSITIVE_INFINITY;
+
+  /** Set/clear the loop region (steps). Kept in sync with project.loopRegion. */
+  setLoopRegion(startStep: number, endStep: number | null): void {
+    this.loopStart = Math.max(0, Math.floor(startStep));
+    this.loopEnd = endStep === null ? Number.POSITIVE_INFINITY : Math.max(this.loopStart + 1, Math.floor(endStep));
+  }
+
   private readonly ctx: AudioContext;
   private readonly cbs: SchedulerCallbacks;
   private readonly totalSteps: () => number;
@@ -97,10 +107,12 @@ export class TransportClock {
 
   play(fromStep: number, leadIn = 0.08): void {
     if (this.running) return;
+    // Starting outside a loop region snaps to its head (the region is what repeats).
+    const start = this.loop && fromStep >= this.loopEnd ? this.loopStart : fromStep;
     const now = this.ctx.currentTime;
     this.baseTime = now + leadIn;
-    this.baseStep = fromStep;
-    this.nextStep = fromStep;
+    this.baseStep = start;
+    this.nextStep = start;
     this.running = true;
     this.startPump();
     // Fill immediately so the first notes are already scheduled before the first wake-up.
@@ -161,7 +173,17 @@ export class TransportClock {
     const horizon = this.ctx.currentTime + this.lookahead;
     const total = this.totalSteps();
     while (this.timeOf(this.nextStep) < horizon) {
-      const abs = this.nextStep;
+      let abs = this.nextStep;
+      // Loop-region wrap: re-anchor the clock so loopStart sounds at the exact
+      // instant loopEnd would have — time stays monotonic, audio clock stays
+      // authoritative, and the wrap is sample-accurate (no audible seam).
+      if (this.loop && abs >= this.loopEnd) {
+        const anchor = this.timeOf(abs);
+        this.baseTime = anchor;
+        this.baseStep = this.loopStart;
+        this.nextStep = this.loopStart;
+        abs = this.loopStart;
+      }
       if (this.loop || abs < total) {
         this.cbs.onStep(abs, this.timeOf(abs));
         this.nextStep++;

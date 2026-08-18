@@ -77,6 +77,28 @@ export interface TrackFx {
   drive: number;
 }
 
+/**
+ * A recorded audio take. Metadata lives in the project (command bus + file
+ * format) and persists; the raw PCM is held in the runtime take registry
+ * (src/audio/recorder.ts) for the session, since Float32 buffers don't belong
+ * in a serializable, undoable command stream.
+ */
+export interface TakeMeta {
+  id: string;
+  name: string;
+  /** Start position on the timeline in 1/16 steps (latency-compensated). */
+  offsetSteps: number;
+  /** Audible length in 1/16 steps. */
+  durationSteps: number;
+  /** Input device that captured this take. */
+  deviceId: string;
+  deviceLabel: string;
+  /** Measured round-trip latency applied to align the take, in ms. */
+  latencyMs: number;
+  /** Peak amplitude 0..1 (for the take list meter). */
+  peak: number;
+}
+
 export interface Track {
   id: string;
   name: string;
@@ -93,6 +115,14 @@ export interface Track {
   placements: Placement[];
   /** Optional grouping tag — tracks sharing a group are tinted/labeled together. */
   groupId?: string | null;
+  /** Audio-input recording state. */
+  recordArm: boolean;
+  /** Live input monitoring through this track's channel strip. */
+  monitor: boolean;
+  /** Recorded takes (metadata); PCM lives in the runtime registry. */
+  takes: TakeMeta[];
+  /** Which take plays back (comp selection); null = none. */
+  activeTakeId: string | null;
 }
 
 export interface TimeSignature {
@@ -120,6 +150,12 @@ export interface LoopRegion {
   endBar: number;
 }
 
+/** Punch-in/out region in bars; recording only captures inside it. Null = no punch. */
+export interface PunchRegion {
+  startBar: number;
+  endBar: number;
+}
+
 export interface Project {
   name: string;
   bpm: number;
@@ -134,6 +170,8 @@ export interface Project {
   markers: Marker[];
   /** Optional loop region; null = loop the entire timeline. */
   loopRegion: LoopRegion | null;
+  /** Optional punch-in/out region for audio recording; null = no punch. */
+  punchRegion: PunchRegion | null;
   /** Epoch ms — surfaced as ISO strings in the file format's metadata block. */
   createdAt: number;
   modifiedAt: number;

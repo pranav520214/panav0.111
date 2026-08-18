@@ -25,6 +25,7 @@ import {
   buildChannel, buildReturn, buildMaster, RETURN_DEFS, isAudible, soloActive,
 } from "./mixer";
 import { encodeWav, playDrum, playNote } from "./synth";
+import { getRecorder } from "./recorder";
 
 export const DEFAULT_MAX_POLYPHONY = 32;
 
@@ -92,6 +93,10 @@ class CadenceEngine {
   private recordArmed = false;
   private loadEma = 0;
 
+  /* audio-input recording (device/monitor/capture/takes live in the recorder) */
+  private recording = false;
+  private takeBufs = new Map<string, AudioBuffer>();
+
   onTransport: ((playing: boolean) => void) | null = null;
 
   /* ---------------- lifecycle ---------------- */
@@ -123,9 +128,13 @@ class CadenceEngine {
       );
       this.clock.loop = this.loop;
 
+      /* Audio-input recorder shares this context and mixer. */
+      getRecorder().attach(this.ctx, this.mixer);
+
       if (this.project) {
         this.mixer.setProject(this.project);
         this.applyLoopRegion(this.project);
+        getRecorder().setBpm(this.project.bpm);
       }
     }
     return this.ctx;
@@ -140,6 +149,16 @@ class CadenceEngine {
     if (this.clock && prev && prev.bpm !== p.bpm) this.clock.setStepDur(this.stepDur());
     // Keep the scheduler's loop region in sync with the arrangement.
     this.applyLoopRegion(p);
+    // Recorder tempo + punch (bars → steps).
+    const rec = getRecorder();
+    rec.setBpm(p.bpm);
+    rec.punch = p.punchRegion
+      ? { startStep: p.punchRegion.startBar * 16, endStep: p.punchRegion.endBar * 16 }
+      : null;
+    // Drop cached take buffers for takes that no longer exist.
+    const live = new Set<string>();
+    for (const t of p.tracks) for (const tk of t.takes) live.add(tk.id);
+    for (const id of this.takeBufs.keys()) if (!live.has(id)) this.takeBufs.delete(id);
   }
 
   /** Push project.loopRegion (bars) into the scheduler (steps). */
@@ -172,6 +191,7 @@ class CadenceEngine {
     this.stoppedStep = this.clock.pause();
     this.playing = false;
     this.pool?.allNotesOff(this.ctx?.currentTime ?? 0);
+    getRecorder().onTransportHalt();
     this.onTransport?.(false);
   }
 
@@ -181,6 +201,7 @@ class CadenceEngine {
       this.pool?.allNotesOff(this.ctx?.currentTime ?? 0);
     }
     this.stoppedStep = 0;
+    getRecorder().onTransportHalt();
     if (this.playing) {
       this.playing = false;
       this.onTransport?.(false);
@@ -199,6 +220,18 @@ class CadenceEngine {
 
   isRecordArmed(): boolean {
     return this.recordArmed;
+  }
+
+  /* ---------------- audio-input recording (delegates to the recorder) ---------------- */
+
+  /** Enter/leave audio record mode; capture itself is driven by the clock onStep. */
+  setRecording(on: boolean): void {
+    this.recording = on;
+    getRecorder().recordEnabled = on;
+    if (!on) getRecorder().onTransportHalt();
+  }
+  isRecording(): boolean {
+    return this.recording;
   }
 
   /** Max simultaneous voices before stealing kicks in. */

@@ -8,7 +8,7 @@
 
 import {
   AutomationLane, AutomationParam, Clip, InstrumentKind, LoopRegion, Marker, Note,
-  Placement, Project, ScaleType, TimeSignature, Track, uid,
+  Placement, Project, PunchRegion, ScaleType, TakeMeta, TimeSignature, Track, uid,
 } from "../types";
 
 const AUTOMATION_PARAMS = new Set<string>(["volume", "pan", "reverb", "delay", "cutoff", "drive"]);
@@ -39,6 +39,37 @@ const MAX_TRACKS = 24;
 const MAX_CLIPS = 512;
 const MAX_NOTES = 2048;
 const MAX_PLACEMENTS = 256;
+const MAX_TAKES = 32;
+
+/** Punch region must be a sane, ordered pair inside the timeline, else null. */
+function sanitizePunch(raw: unknown, lengthBars: number): PunchRegion | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const startBar = num(r.startBar, 0, lengthBars, 0);
+  const endBar = num(r.endBar, 0, lengthBars, 0);
+  return endBar - startBar >= 0.25 ? { startBar, endBar } : null;
+}
+
+/** Take metadata only — PCM lives in the runtime registry, never in the file. */
+function sanitizeTakes(raw: unknown): TakeMeta[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TakeMeta[] = [];
+  for (const rt of raw.slice(0, MAX_TAKES)) {
+    if (typeof rt !== "object" || rt === null) continue;
+    const t = rt as Record<string, unknown>;
+    out.push({
+      id: id(t.id, "take"),
+      name: str(t.name, 32, "Take") || "Take",
+      offsetSteps: int(t.offsetSteps, 0, 16 * 64, 0),
+      durationSteps: int(t.durationSteps, 1, 16 * 64, 16),
+      deviceId: str(t.deviceId, 128, ""),
+      deviceLabel: str(t.deviceLabel, 64, "Input"),
+      latencyMs: num(t.latencyMs, 0, 1000, 0),
+      peak: num(t.peak, 0, 1, 0),
+    });
+  }
+  return out;
+}
 
 function validateNote(raw: unknown): Note | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -157,6 +188,10 @@ export function validateProject(raw: unknown): ValidationResult {
         sourceClipId,
         placements,
         groupId: typeof t.groupId === "string" && t.groupId.length <= 16 ? t.groupId : null,
+        recordArm: bool(t.recordArm, false),
+        monitor: bool(t.monitor, false),
+        takes: sanitizeTakes(t.takes),
+        activeTakeId: typeof t.activeTakeId === "string" ? t.activeTakeId : null,
       });
 
       // note ranges must match the instrument even if the clip pre-dated a track swap
@@ -243,6 +278,7 @@ export function validateProject(raw: unknown): ValidationResult {
       clips,
       markers,
       loopRegion,
+      punchRegion: sanitizePunch(p.punchRegion, lengthBars),
       createdAt: typeof p.createdAt === "number" && Number.isFinite(p.createdAt) && p.createdAt >= 0 ? p.createdAt : now,
       modifiedAt: typeof p.modifiedAt === "number" && Number.isFinite(p.modifiedAt) && p.modifiedAt >= 0 ? p.modifiedAt : now,
     },

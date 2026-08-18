@@ -226,6 +226,34 @@ export function execCommand(p: Project, c: Command): Project {
     case "set_track_color":
       return updateTrack(p, c.trackId, (t) => ({ ...t, color: c.color }));
 
+    /* ---------------- recording ---------------- */
+
+    case "set_track_record_arm":
+      return updateTrack(p, c.trackId, (t) => ({ ...t, recordArm: c.value }));
+
+    case "set_track_monitor":
+      return updateTrack(p, c.trackId, (t) => ({ ...t, monitor: c.value }));
+
+    case "add_take":
+      return updateTrack(p, c.trackId, (t) => ({
+        ...t,
+        takes: [...t.takes, c.take],
+        activeTakeId: c.setActive === false ? t.activeTakeId : c.take.id,
+      }));
+
+    case "remove_take":
+      return updateTrack(p, c.trackId, (t) => ({
+        ...t,
+        takes: t.takes.filter((tk) => tk.id !== c.takeId),
+        activeTakeId: t.activeTakeId === c.takeId ? null : t.activeTakeId,
+      }));
+
+    case "set_active_take":
+      return updateTrack(p, c.trackId, (t) => ({ ...t, activeTakeId: c.takeId }));
+
+    case "set_punch_region":
+      return { ...p, punchRegion: c.region };
+
     default:
       return p;
   }
@@ -315,6 +343,11 @@ export function makeTrack(kind: Track["instrument"], name: string, color: string
     clipIds: [clip.id],
     sourceClipId: clip.id,
     placements: [],
+    groupId: null,
+    recordArm: false,
+    monitor: false,
+    takes: [],
+    activeTakeId: null,
   };
 }
 

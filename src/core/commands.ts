@@ -7,7 +7,7 @@
  *  - User gestures, the AI copilot and file imports all speak this same
  *    vocabulary — there is exactly one mutation path. */
 
-import { Clip, LoopRegion, Marker, Note, ScaleType, Track, TrackFx } from "../types";
+import { Clip, LoopRegion, Marker, Note, PunchRegion, ScaleType, TakeMeta, Track, TrackFx } from "../types";
 
 export type Command =
   | { op: "set_project_name"; name: string }
@@ -37,7 +37,14 @@ export type Command =
   | { op: "set_markers"; markers: Marker[] }
   | { op: "set_loop_region"; region: LoopRegion | null }
   | { op: "set_track_group"; trackId: string; groupId: string | null }
-  | { op: "set_track_color"; trackId: string; color: string };
+  | { op: "set_track_color"; trackId: string; color: string }
+  /* recording: per-track arm/monitor, takes (metadata), comp selection, punch */
+  | { op: "set_track_record_arm"; trackId: string; value: boolean }
+  | { op: "set_track_monitor"; trackId: string; value: boolean }
+  | { op: "add_take"; trackId: string; take: TakeMeta; setActive?: boolean }
+  | { op: "remove_take"; trackId: string; takeId: string }
+  | { op: "set_active_take"; trackId: string; takeId: string | null }
+  | { op: "set_punch_region"; region: PunchRegion | null };
 
 /** Partial placement edit — every field optional, all values clamped by the executor. */
 export interface PlacementPatch {
@@ -80,6 +87,12 @@ export const COMMAND_META: Record<Command["op"], { name: string; category: Comma
   set_loop_region: { name: "Set loop region", category: "structure" },
   set_track_group: { name: "Set track group", category: "structure" },
   set_track_color: { name: "Set track color", category: "structure" },
+  set_track_record_arm: { name: "Arm track for recording", category: "structure" },
+  set_track_monitor: { name: "Toggle input monitoring", category: "mix" },
+  add_take: { name: "Add recorded take", category: "structure" },
+  remove_take: { name: "Delete take", category: "structure" },
+  set_active_take: { name: "Select take (comp)", category: "structure" },
+  set_punch_region: { name: "Set punch region", category: "structure" },
 };
 
 /* ---------------- schema validation ----------------
@@ -272,6 +285,34 @@ export function validateCommand(c: Command): string | null {
     case "set_track_color":
       if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
       return isStr(c.color, 16) && /^#[0-9a-fA-F]{6}$/.test(c.color) ? null : "color must be a #rrggbb hex string";
+    case "set_track_record_arm":
+    case "set_track_monitor":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      return isBool(c.value) ? null : "value must be a boolean";
+    case "add_take": {
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      const t = c.take as unknown as Record<string, unknown>;
+      if (typeof t !== "object" || t === null) return "take must be an object";
+      if (!isStr(t.id, 128)) return "take.id must be a non-empty string";
+      if (!isNum(t.offsetSteps) || !isInt(t.offsetSteps) || !inRange(t.offsetSteps, 0, 16 * 64)) return "take.offsetSteps must be an integer 0–1024";
+      if (!isNum(t.durationSteps) || !isInt(t.durationSteps) || !inRange(t.durationSteps, 1, 16 * 64)) return "take.durationSteps must be an integer 1–1024";
+      if (c.setActive !== undefined && !isBool(c.setActive)) return "setActive must be a boolean";
+      return null;
+    }
+    case "remove_take":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      return isStr(c.takeId, 128) ? null : "takeId must be a non-empty string";
+    case "set_active_take":
+      if (!isStr(c.trackId, 128)) return "trackId must be a non-empty string";
+      return c.takeId === null || isStr(c.takeId, 128) ? null : "takeId must be a non-empty string or null";
+    case "set_punch_region": {
+      if (c.region === null) return null;
+      if (typeof c.region !== "object") return "region must be an object or null";
+      const r = c.region as unknown as Record<string, unknown>;
+      if (!isNum(r.startBar) || !inRange(r.startBar, 0, 4096)) return "region.startBar must be a number 0–4096";
+      if (!isNum(r.endBar) || !inRange(r.endBar, 0, 4096)) return "region.endBar must be a number 0–4096";
+      return r.endBar > r.startBar ? null : "region.endBar must be greater than startBar";
+    }
     default:
       return "unknown command op";
   }

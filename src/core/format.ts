@@ -31,7 +31,7 @@
 
 import {
   AutomationLane, AutomationParam, Clip, InstrumentKind, Note, Placement,
-  Project, ScaleType, TimeSignature, Track, TrackFx,
+  Project, PunchRegion, ScaleType, TakeMeta, TimeSignature, Track, TrackFx,
 } from "../types";
 import { validateProject } from "./validate";
 
@@ -47,10 +47,15 @@ export type FileResult =
 interface FilePlacement { id: string; clipId: string; bar: number; }
 interface FileNote { id: string; pitch: number; start: number; dur: number; vel: number; }
 interface FileClip { id: string; name: string; lengthBars: number; notes: FileNote[]; }
+/** Take metadata only — raw PCM is session-only and never serialized. */
+interface FileTake { id: string; name: string; offsetSteps: number; durationSteps: number; deviceId: string; deviceLabel: string; latencyMs: number; peak: number; }
 interface FileTrack {
   id: string; name: string; color: string; instrumentId: string;
   volume: number; pan: number; mute: boolean; solo: boolean;
   clipIds: string[]; sourceClipId: string; placements: FilePlacement[];
+  groupId: string | null;
+  recordArm: boolean; monitor: boolean;
+  takes: FileTake[]; activeTakeId: string | null;
 }
 interface FileInstrument { id: string; kind: InstrumentKind; name: string; presetId: string | null; }
 interface FileEffect { id: string; trackId: string; type: "channel-strip"; params: TrackFx; }
@@ -80,6 +85,8 @@ export interface ProjectFileV1 {
   markers: { id: string; bar: number; label: string }[];
   /** Loop region in bars, or null = loop the whole timeline. */
   loopRegion: { startBar: number; endBar: number } | null;
+  /** Punch-in/out region for audio recording, or null = no punch. */
+  punchRegion: { startBar: number; endBar: number } | null;
 }
 
 /* ---------------- serialize ---------------- */
@@ -127,6 +134,10 @@ export function toV1Doc(p: Project): ProjectFileV1 {
       sourceClipId: t.sourceClipId,
       placements: t.placements.map((pl) => ({ ...pl })),
       groupId: t.groupId ?? null,
+      recordArm: t.recordArm,
+      monitor: t.monitor,
+      takes: t.takes.map((tk) => ({ ...tk })),
+      activeTakeId: t.activeTakeId,
     })),
     clips: Object.values(p.clips).map((c) => ({
       id: c.id,
@@ -145,6 +156,7 @@ export function toV1Doc(p: Project): ProjectFileV1 {
     presets: [],
     markers: p.markers.map((m) => ({ ...m })),
     loopRegion: p.loopRegion ? { ...p.loopRegion } : null,
+    punchRegion: p.punchRegion ? { ...p.punchRegion } : null,
   };
 }
 
@@ -314,6 +326,7 @@ function fromV1Doc(raw: Record<string, unknown>): FileResult {
     ),
     markers: Array.isArray(raw.markers) ? raw.markers : [],
     loopRegion: isObj(raw.loopRegion) ? raw.loopRegion : null,
+    punchRegion: isObj(raw.punchRegion) ? raw.punchRegion : null,
     createdAt: parseTs(meta.created) ?? now,
     modifiedAt: parseTs(meta.modified) ?? now,
   };

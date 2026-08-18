@@ -17,6 +17,7 @@ import {
 import {
   genBass, genChords, genDrums, genMelody, mulberry32, padFromChords, Rng,
 } from "../theory";
+import { makeTrackWithClip } from "../core/executors";
 
 export interface PlanItem { label: string; command: DawCommand; }
 export type AiResult =
@@ -69,14 +70,10 @@ function drumEnergy(clip: Clip | undefined): number {
 function ensureTrack(p: Project, kind: InstrumentKind, items: PlanItem[], clipsToCreate: Clip[], name: string, color: string): Track {
   const existing = findKind(p, kind);
   if (existing) return existing;
-  const clip: Clip = { id: uid("clip"), name: `${name} 1`, lengthBars: 1, notes: [] };
+  const { track, clip } = makeTrackWithClip(kind, name, color);
+  track.volume = 0.8;
+  track.fx = { reverb: kind === "pad" ? 0.4 : 0.1, delay: 0, cutoff: kind === "bass" ? 4200 : 12000, drive: 0 };
   clipsToCreate.push(clip);
-  const track: Track = {
-    id: uid("trk"), name, color, instrument: kind,
-    volume: 0.8, pan: 0, mute: false, solo: false,
-    fx: { reverb: kind === "pad" ? 0.4 : 0.1, delay: 0, cutoff: kind === "bass" ? 4200 : 12000, drive: 0 },
-    clipIds: [clip.id], sourceClipId: clip.id, placements: [],
-  };
   items.push({ label: `Add a new ${name} track`, command: { op: "add_track", track } });
   return track;
 }

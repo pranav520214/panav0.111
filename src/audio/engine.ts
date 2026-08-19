@@ -16,7 +16,8 @@
  *  - The UI never touches an AudioNode: it calls play/pause/stop/loop/record-arm
  *    and reads transport/metering through these methods only (via core/audio.ts). */
 
-import { InstrumentKind, Note, Placement, Project, Track } from "../types";
+import { AutomationLane, InstrumentKind, Note, Placement, Project, Track } from "../types";
+import { activeLanesForTrack, laneRealValueAt } from "./automation";
 import { AudioProfiler, ProfilerStats } from "./profiler";
 import { TransportClock } from "./scheduler";
 import { VoicePool } from "./voicePool";
@@ -29,58 +30,17 @@ import { getRecorder } from "./recorder";
 
 export const DEFAULT_MAX_POLYPHONY = 32;
 
-/**
- * Walk every note that sounds on `absStep` and hand it to `emit`.
- * Shared verbatim by live playback and offline rendering — one code path.
- * The loop itself allocates nothing; `emit` is the only callback.
- *
- * Placement trim model: `offsetSteps` skips the head of the clip (the block's
- * bar position is where content step `offsetSteps` begins) and `lengthBars`
- * caps the audible tail. `rel` is the step index *within the audible window*
- * (0 at the block's left edge) — the engine uses it for fade envelopes.
- */
-export function stepNotes(
-  p: Project,
-  absStep: number,
-  emit: (t: Track, n: Note, rel: number, pl: Placement) => void,
-): void {
-  const total = p.lengthBars * 16;
-  const s = ((absStep % total) + total) % total;
-  // Solo/mute semantics live in the mixer (single source of truth).
-  const anySolo = soloActive(p.tracks);
-  for (const t of p.tracks) {
-    if (!isAudible(t, anySolo)) continue;
-    for (const pl of t.placements) {
-      const clip = p.clips[pl.clipId];
-      if (!clip) continue;
-      const off = pl.offsetSteps ?? 0;
-      const clipSteps = clip.lengthBars * 16;
-      const vis = pl.lengthBars !== undefined ? Math.round(pl.lengthBars * 16) : clipSteps - off;
-      // fractional bars (beat-level splits) → fractional step position
-      const relF = s - pl.bar * 16;
-      if (relF < 0 || relF >= vis) continue;
-      const rel = Math.floor(relF);
-      // Match any note whose (possibly fractional, post-quantize) start lands in
-      // this step; the caller places it at its exact sub-step clock time.
-      for (const n of clip.notes) {
-        if (Math.floor(n.start) - off === rel && n.start < off + vis) emit(t, n, rel, pl);
-      }
-    }
-  }
-}
-
-/** Fade envelope value (0..1) for a note onset at `rel` inside the audible window. */
-export function placementFade(pl: Placement, rel: number, visSteps: number): number {
-  let f = 1;
-  if (pl.fadeIn && pl.fadeIn > 0) f *= Math.min(1, rel / pl.fadeIn);
-  if (pl.fadeOut && pl.fadeOut > 0) f *= Math.min(1, (visSteps - rel) / pl.fadeOut);
-  return f < 0 ? 0 : f > 1 ? 1 : f;
-}
+/* Note scheduling lives in schedule.ts — shared verbatim with the offline
+ * renderer so live playback and WAV export walk the identical code path. */
+export { stepNotes, placementFade } from "./schedule";
+import { stepNotes, placementFade } from "./schedule";
 
 class CadenceEngine {
   ctx: AudioContext | null = null;
   private mixer: MixerEngine | null = null;
   private project: Project | null = null;
+  /** Automation lanes grouped by trackId for O(1) per-step lookup. */
+  private automationByTrack = new Map<string, AutomationLane[]>();
 
   /* real-time core */
   private clock: TransportClock | null = null;
@@ -149,6 +109,13 @@ class CadenceEngine {
     if (this.clock && prev && prev.bpm !== p.bpm) this.clock.setStepDur(this.stepDur());
     // Keep the scheduler's loop region in sync with the arrangement.
     this.applyLoopRegion(p);
+    // Group active automation lanes by track for fast per-step lookup.
+    this.automationByTrack.clear();
+    for (const t of p.tracks) {
+      const lanes = activeLanesForTrack(p.automation, t.id);
+      if (lanes.length > 0) this.automationByTrack.set(t.id, lanes);
+    }
+
     // Recorder tempo + punch (bars → steps).
     const rec = getRecorder();
     rec.setBpm(p.bpm);
@@ -295,6 +262,20 @@ class CadenceEngine {
       const dur = t.instrument === "drumkit" ? 0.4 : Math.max(0.06, n.dur * sd);
       pool.trigger(input, when, dur, n.vel * f, t.instrument as InstrumentKind, n.pitch);
     });
+
+    // Automation: evaluate each lane at this exact step and schedule the value at
+    // the same sample-accurate clock instant as the notes above — no drift.
+    this.applyAutomationAt(abs, time, sd);
+  }
+
+  private applyAutomationAt(abs: number, time: number, sd: number): void {
+    if (!this.mixer || this.automationByTrack.size === 0) return;
+    for (const [trackId, lanes] of this.automationByTrack) {
+      for (const lane of lanes) {
+        const v = laneRealValueAt(lane, abs);
+        this.mixer.applyAutomation(trackId, lane.param, v, time, sd);
+      }
+    }
   }
 
   getCurrentStep(): number {

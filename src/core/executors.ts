@@ -3,7 +3,7 @@
  * out-of-range values are clamped or ignored. The bus is their only caller. */
 
 import {
-  Clip, Note, Placement, Project, STEPS_PER_BAR, Track, uid,
+  AutomationEvent, AutomationLane, Clip, Note, Placement, Project, STEPS_PER_BAR, Track, uid,
 } from "../types";
 import { Command, PlacementPatch } from "./commands";
 
@@ -254,9 +254,60 @@ export function execCommand(p: Project, c: Command): Project {
     case "set_punch_region":
       return { ...p, punchRegion: c.region };
 
+    /* ---------------- automation ---------------- */
+
+    case "upsert_automation_lane": {
+      const lane = sanitizeLane(c.lane);
+      const existing = p.automation.some((l) => l.id === lane.id);
+      return {
+        ...p,
+        automation: existing
+          ? p.automation.map((l) => (l.id === lane.id ? lane : l))
+          : [...p.automation, lane],
+      };
+    }
+
+    case "set_automation_points": {
+      const points = sanitizePoints(c.points);
+      return {
+        ...p,
+        automation: p.automation.map((l) => (l.id === c.laneId ? { ...l, points } : l)),
+      };
+    }
+
+    case "remove_automation_lane":
+      return { ...p, automation: p.automation.filter((l) => l.id !== c.laneId) };
+
+    case "set_automation_lock":
+      return {
+        ...p,
+        automation: p.automation.map((l) => (l.id === c.laneId ? { ...l, locked: c.locked } : l)),
+      };
+
     default:
       return p;
   }
+}
+
+/* Automation sanitization — clamp + sort so executors stay total. */
+function sanitizePoints(points: AutomationEvent[]): AutomationEvent[] {
+  return points
+    .map((pt) => ({
+      step: clamp(pt.step, 0, 4096),
+      value: clamp(pt.value, 0, 1),
+      ...(pt.curve ? { curve: pt.curve } : {}),
+    }))
+    .sort((a, b) => a.step - b.step);
+}
+
+function sanitizeLane(lane: AutomationLane): AutomationLane {
+  return {
+    id: lane.id,
+    trackId: lane.trackId,
+    param: lane.param,
+    points: sanitizePoints(lane.points),
+    ...(lane.locked !== undefined ? { locked: lane.locked } : {}),
+  };
 }
 
 /** Merge a patch into one placement, keeping the audible window coherent:

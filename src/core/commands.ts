@@ -7,7 +7,7 @@
  *  - User gestures, the AI copilot and file imports all speak this same
  *    vocabulary — there is exactly one mutation path. */
 
-import { Clip, LoopRegion, Marker, Note, PunchRegion, ScaleType, TakeMeta, Track, TrackFx } from "../types";
+import { AutomationEvent, AutomationLane, Clip, CurveKind, LoopRegion, Marker, Note, PunchRegion, ScaleType, TakeMeta, Track, TrackFx } from "../types";
 
 export type Command =
   | { op: "set_project_name"; name: string }
@@ -44,7 +44,12 @@ export type Command =
   | { op: "add_take"; trackId: string; take: TakeMeta; setActive?: boolean }
   | { op: "remove_take"; trackId: string; takeId: string }
   | { op: "set_active_take"; trackId: string; takeId: string | null }
-  | { op: "set_punch_region"; region: PunchRegion | null };
+  | { op: "set_punch_region"; region: PunchRegion | null }
+  /* automation lanes */
+  | { op: "upsert_automation_lane"; lane: AutomationLane }
+  | { op: "set_automation_points"; laneId: string; points: AutomationEvent[] }
+  | { op: "remove_automation_lane"; laneId: string }
+  | { op: "set_automation_lock"; laneId: string; locked: boolean };
 
 /** Partial placement edit — every field optional, all values clamped by the executor. */
 export interface PlacementPatch {
@@ -56,7 +61,7 @@ export interface PlacementPatch {
   fadeOut?: number;
 }
 
-export type CommandCategory = "structure" | "mix" | "midi";
+export type CommandCategory = "structure" | "mix" | "midi" | "automation";
 
 /** Human-readable metadata per op — used by inspectors/logs and future tooling. */
 export const COMMAND_META: Record<Command["op"], { name: string; category: CommandCategory }> = {
@@ -93,6 +98,10 @@ export const COMMAND_META: Record<Command["op"], { name: string; category: Comma
   remove_take: { name: "Delete take", category: "structure" },
   set_active_take: { name: "Select take (comp)", category: "structure" },
   set_punch_region: { name: "Set punch region", category: "structure" },
+  upsert_automation_lane: { name: "Upsert automation lane", category: "automation" },
+  set_automation_points: { name: "Edit automation points", category: "automation" },
+  remove_automation_lane: { name: "Remove automation lane", category: "automation" },
+  set_automation_lock: { name: "Lock/unlock automation lane", category: "automation" },
 };
 
 /* ---------------- schema validation ----------------
@@ -121,6 +130,25 @@ function checkNotes(notes: unknown): string | null {
     if (!isNum(note.start) || !isInt(note.start) || !inRange(note.start, 0, 4096)) return "note.start must be an integer 0–4096";
     if (!isNum(note.dur) || !isInt(note.dur) || !inRange(note.dur, 1, 256)) return "note.dur must be an integer 1–256";
     if (!isNum(note.vel) || !inRange(note.vel, 0, 1)) return "note.vel must be a number 0–1";
+  }
+  return null;
+}
+
+const AUTOMATION_PARAMS = new Set<string>(["volume", "pan", "reverb", "delay", "cutoff", "drive"]);
+const CURVES = new Set<string>(["linear", "smooth", "expUp", "expDown"]);
+const isParam = (v: unknown): v is string => typeof v === "string" && AUTOMATION_PARAMS.has(v);
+
+function checkAutomationPoints(points: unknown): string | null {
+  if (!Array.isArray(points)) return "points must be an array";
+  if (points.length > 4096) return "too many automation points (max 4096)";
+  for (const p of points) {
+    if (typeof p !== "object" || p === null) return "point must be an object";
+    const pt = p as Record<string, unknown>;
+    if (!isNum(pt.step) || !inRange(pt.step, 0, 4096)) return "point.step must be a number 0–4096";
+    if (!isNum(pt.value) || !inRange(pt.value, 0, 1)) return "point.value must be a number 0–1";
+    if (pt.curve !== undefined && (typeof pt.curve !== "string" || !CURVES.has(pt.curve))) {
+      return "point.curve must be one of linear/smooth/expUp/expDown";
+    }
   }
   return null;
 }
@@ -313,6 +341,25 @@ export function validateCommand(c: Command): string | null {
       if (!isNum(r.endBar) || !inRange(r.endBar, 0, 4096)) return "region.endBar must be a number 0–4096";
       return r.endBar > r.startBar ? null : "region.endBar must be greater than startBar";
     }
+    case "upsert_automation_lane": {
+      const l = c.lane as unknown as Record<string, unknown>;
+      if (typeof l !== "object" || l === null) return "lane must be an object";
+      if (!isStr(l.id, 128)) return "lane.id must be a non-empty string";
+      if (!isStr(l.trackId, 128)) return "lane.trackId must be a non-empty string";
+      if (!isParam(l.param)) return "lane.param is not an automatable parameter";
+      if (!Array.isArray(l.points)) return "lane.points must be an array";
+      const ptsErr = checkAutomationPoints(l.points);
+      if (ptsErr) return ptsErr;
+      return null;
+    }
+    case "set_automation_points":
+      if (!isStr(c.laneId, 128)) return "laneId must be a non-empty string";
+      return checkAutomationPoints(c.points);
+    case "remove_automation_lane":
+      return isStr(c.laneId, 128) ? null : "laneId must be a non-empty string";
+    case "set_automation_lock":
+      if (!isStr(c.laneId, 128)) return "laneId must be a non-empty string";
+      return isBool(c.locked) ? null : "locked must be a boolean";
     default:
       return "unknown command op";
   }

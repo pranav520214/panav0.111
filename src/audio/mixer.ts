@@ -21,9 +21,11 @@
  * Everything here is stateless with respect to the project: the mixer only
  * mirrors what the command bus already validated. It never mutates Project. */
 
-import { Project, Track } from "../types";
+import { AutomationParam, Project, Track } from "../types";
 import { makeDriveCurve, makeImpulse } from "./synth";
 import { estimateGraphCost } from "./fx";
+
+const clampF = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /* ---------------- solo logic (shared with the scheduler) ---------------- */
 
@@ -281,6 +283,47 @@ export class MixerEngine {
     if (Math.abs(t.fx.drive - ch.lastDrive) > 0.005) {
       ch.shaper.curve = makeDriveCurve(t.fx.drive);
       ch.lastDrive = t.fx.drive;
+    }
+  }
+
+  /**
+   * Apply one automated parameter value at an exact audio-clock instant.
+   * Shared by the real-time engine (per scheduled step) and the offline renderer,
+   * so both modulate the identical node graph identically. Uses a short linear
+   * ramp to the value so consecutive steps join smoothly without zipper noise,
+   * while remaining phase-accurate (the value is reached exactly at `time+dur`).
+   */
+  applyAutomation(trackId: string, param: AutomationParam, realValue: number, time: number, dur: number): void {
+    const ch = this.channels.get(trackId);
+    if (!ch) return;
+    const v = realValue;
+    switch (param) {
+      case "volume":
+        ch.fader.gain.setValueAtTime(v, time);
+        ch.fader.gain.linearRampToValueAtTime(v, time + Math.max(0.001, dur));
+        break;
+      case "pan":
+        ch.pan.pan.setValueAtTime(clampF(v, -1, 1), time);
+        ch.pan.pan.linearRampToValueAtTime(clampF(v, -1, 1), time + Math.max(0.001, dur));
+        break;
+      case "cutoff":
+        ch.filter.frequency.setValueAtTime(clampF(v, 40, 20000), time);
+        ch.filter.frequency.linearRampToValueAtTime(clampF(v, 40, 20000), time + Math.max(0.001, dur));
+        break;
+      case "drive":
+        if (Math.abs(v - ch.lastDrive) > 0.005) {
+          ch.shaper.curve = makeDriveCurve(clampF(v, 0, 1));
+          ch.lastDrive = v;
+        }
+        break;
+      case "reverb":
+        ch.sends.get("reverb")?.gain.setValueAtTime(clampF(v, 0, 1) * 0.7, time);
+        ch.sends.get("reverb")?.gain.linearRampToValueAtTime(clampF(v, 0, 1) * 0.7, time + Math.max(0.001, dur));
+        break;
+      case "delay":
+        ch.sends.get("delay")?.gain.setValueAtTime(clampF(v, 0, 1) * 0.55, time);
+        ch.sends.get("delay")?.gain.linearRampToValueAtTime(clampF(v, 0, 1) * 0.55, time + Math.max(0.001, dur));
+        break;
     }
   }
 

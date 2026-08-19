@@ -6,14 +6,29 @@ import { InstrumentKind } from "../types";
 
 export const noteFreq = (midi: number) => 440 * Math.pow(2, (midi - 69) / 12);
 
-/* ---------------- noise buffer (cached per context) ---------------- */
+/* Deterministic PRNG (mulberry32). All noise/impulse content is seeded, NOT
+ * Math.random(), so a live render and an offline render of the same project use
+ * byte-identical noise/reverb material — a hard requirement for the realtime↔
+ * offline parity test to diff meaningful signal instead of unrelated noise. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------------- noise buffer (cached per context, deterministic) ---------------- */
 const noiseCache = new WeakMap<BaseAudioContext, AudioBuffer>();
 export function noiseBuffer(ctx: BaseAudioContext): AudioBuffer {
   let buf = noiseCache.get(ctx);
   if (!buf) {
     buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const rng = mulberry32(0x9e3779b9);
+    for (let i = 0; i < d.length; i++) d[i] = rng() * 2 - 1;
     noiseCache.set(ctx, buf);
   }
   return buf;
@@ -180,10 +195,11 @@ export function playDrum(ctx: BaseAudioContext, dest: AudioNode, lane: number, t
 export function makeImpulse(ctx: BaseAudioContext, seconds = 1.9, decay = 2.6): AudioBuffer {
   const len = Math.floor(ctx.sampleRate * seconds);
   const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  const rng = mulberry32(0x51ed270b); // fixed seed — identical impulse on every render
   for (let ch = 0; ch < 2; ch++) {
     const d = buf.getChannelData(ch);
     for (let i = 0; i < len; i++) {
-      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+      d[i] = (rng() * 2 - 1) * Math.pow(1 - i / len, decay);
     }
   }
   return buf;

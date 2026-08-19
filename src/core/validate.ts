@@ -7,11 +7,13 @@
  * so a tampered or version-skewed save can never crash the engine or the UI. */
 
 import {
-  AutomationLane, AutomationParam, Clip, InstrumentKind, LoopRegion, Marker, Note,
-  Placement, Project, PunchRegion, ScaleType, TakeMeta, TimeSignature, Track, uid,
+  AutomationEvent, AutomationLane, AutomationParam, Clip, CurveKind, InstrumentKind,
+  LoopRegion, Marker, Note, Placement, Project, PunchRegion, ScaleType, TakeMeta,
+  TimeSignature, Track, uid,
 } from "../types";
 
 const AUTOMATION_PARAMS = new Set<string>(["volume", "pan", "reverb", "delay", "cutoff", "drive"]);
+const AUTOMATION_CURVES = new Set<string>(["linear", "smooth", "expUp", "expDown"]);
 const TIME_SIG_UNITS = new Set<number>([2, 4, 8, 16]);
 
 export type ValidationResult =
@@ -227,14 +229,23 @@ export function validateProject(raw: unknown): ValidationResult {
       const param = typeof a.param === "string" && AUTOMATION_PARAMS.has(a.param) ? (a.param as AutomationParam) : null;
       if (!trackId || !param) continue;
       const points = Array.isArray(a.points)
-        ? a.points.slice(0, 512).flatMap((rp): { step: number; value: number }[] => {
+        ? a.points.slice(0, 512).flatMap((rp): AutomationEvent[] => {
             if (typeof rp !== "object" || rp === null) return [];
             const pt = rp as Record<string, unknown>;
             if (typeof pt.step !== "number" || typeof pt.value !== "number") return [];
-            return [{ step: int(pt.step, 0, 16 * 64, 0), value: num(pt.value, 0, 1, 0) }];
+            const ev: AutomationEvent = {
+              step: num(pt.step, 0, 16 * 64, 0),
+              value: num(pt.value, 0, 1, 0),
+            };
+            if (typeof pt.curve === "string" && AUTOMATION_CURVES.has(pt.curve)) {
+              ev.curve = pt.curve as CurveKind;
+            }
+            return [ev];
           })
         : [];
-      automation.push({ id: id(a.id, "auto"), trackId, param, points });
+      const lane: AutomationLane = { id: id(a.id, "auto"), trackId, param, points };
+      if (a.locked === true) lane.locked = true;
+      automation.push(lane);
     }
   }
 

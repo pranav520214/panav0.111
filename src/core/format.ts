@@ -30,7 +30,7 @@
  *    newer than the app is rejected with an explicit "update the app" error. */
 
 import {
-  AutomationLane, AutomationParam, Clip, InstrumentKind, Note, Placement,
+  AutomationLane, AutomationParam, Clip, CurveKind, InstrumentKind, Note, Placement,
   Project, PunchRegion, ScaleType, TakeMeta, TimeSignature, Track, TrackFx,
 } from "../types";
 import { validateProject } from "./validate";
@@ -59,7 +59,7 @@ interface FileTrack {
 }
 interface FileInstrument { id: string; kind: InstrumentKind; name: string; presetId: string | null; }
 interface FileEffect { id: string; trackId: string; type: "channel-strip"; params: TrackFx; }
-interface FileAutomation { id: string; trackId: string; param: AutomationParam; points: { step: number; value: number }[]; }
+interface FileAutomation { id: string; trackId: string; param: AutomationParam; locked?: boolean; points: { step: number; value: number; curve?: CurveKind }[]; }
 interface FileRouting {
   outputs: { id: string; name: string }[];
   assignments: { trackId: string; output: string }[];
@@ -147,7 +147,13 @@ export function toV1Doc(p: Project): ProjectFileV1 {
     })),
     instruments,
     effects,
-    automation: p.automation.map((a) => ({ ...a, points: a.points.map((pt) => ({ ...pt })) })),
+    automation: p.automation.map((a) => ({
+      id: a.id,
+      trackId: a.trackId,
+      param: a.param,
+      ...(a.locked !== undefined ? { locked: a.locked } : {}),
+      points: a.points.map((pt) => ({ step: pt.step, value: pt.value, ...(pt.curve ? { curve: pt.curve } : {}) })),
+    })),
     routing: {
       outputs: [{ id: "master", name: "Master" }],
       assignments: p.tracks.map((t) => ({ trackId: t.id, output: "master" })),

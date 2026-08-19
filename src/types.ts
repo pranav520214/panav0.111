@@ -132,9 +132,14 @@ export interface TimeSignature {
 
 export type AutomationParam = "volume" | "pan" | "reverb" | "delay" | "cutoff" | "drive";
 
+/** Interpolation leaving a point toward the next one. */
+export type CurveKind = "linear" | "smooth" | "expUp" | "expDown";
+
 export interface AutomationEvent {
   step: number; // absolute 16th-note step on the timeline
   value: number; // normalized 0..1 (interpreted per param)
+  /** Interpolation from this point to the next (default "linear"). */
+  curve?: CurveKind;
 }
 
 export interface AutomationLane {
@@ -142,6 +147,8 @@ export interface AutomationLane {
   trackId: string;
   param: AutomationParam;
   points: AutomationEvent[];
+  /** Edit-lock: playback still reads the lane, but the UI refuses edits. */
+  locked?: boolean;
 }
 
 /** Timeline loop region in bars, or null for "loop the whole song". */
